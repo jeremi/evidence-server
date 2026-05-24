@@ -6,11 +6,18 @@ use registry_witness_core::model::{
     SubjectRequest,
 };
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 use utoipa::openapi::OpenApi;
 use utoipa::PartialSchema;
 
 #[must_use]
 pub fn openapi_document() -> OpenApi {
+    static DOCUMENT: OnceLock<OpenApi> = OnceLock::new();
+
+    DOCUMENT.get_or_init(build_openapi_document).clone()
+}
+
+fn build_openapi_document() -> OpenApi {
     let mut raw_document = json!({
         "openapi": "3.1.0",
         "info": {
@@ -220,6 +227,9 @@ pub fn openapi_document() -> OpenApi {
             }
         },
         "components": {
+            "schemas": {
+                "ProblemDetails": problem_details_schema()
+            },
             "securitySchemes": {
                 "apiKeyAuth": {
                     "type": "apiKey",
@@ -695,26 +705,49 @@ fn set_response_example(
     content_type: &str,
     example: Value,
 ) {
-    let response = document["paths"][path][method]["responses"][status]
-        .as_object_mut()
-        .unwrap_or_else(|| panic!("missing response {method} {path} {status}"));
+    let Some(response) = document
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .and_then(|paths| paths.get_mut(path))
+        .and_then(Value::as_object_mut)
+        .and_then(|path_item| path_item.get_mut(method))
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(status))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
     response
         .entry("description")
         .or_insert_with(|| json!(description));
-    let content = response
-        .entry("content")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .expect("response content is an object");
-    let media_type = content
-        .entry(content_type.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .expect("media type content is an object");
-    if content_type == "application/problem+json" {
+    let content_entry = response.entry("content").or_insert_with(|| json!({}));
+    let Some(content) = content_entry.as_object_mut() else {
+        return;
+    };
+
+    let media_type_entry = if content.is_empty() {
+        content
+            .entry(content_type.to_string())
+            .or_insert_with(|| json!({}))
+    } else {
+        let Some(media_type) = content.get_mut(content_type) else {
+            return;
+        };
         media_type
-            .entry("schema")
-            .or_insert_with(problem_details_schema);
+    };
+    let Some(media_type) = media_type_entry.as_object_mut() else {
+        return;
+    };
+
+    if content_type == "application/problem+json" {
+        media_type.entry("schema").or_insert_with(|| {
+            json!({
+                "$ref": "#/components/schemas/ProblemDetails"
+            })
+        });
     }
     media_type.insert("example".to_string(), example);
 }
@@ -989,7 +1022,7 @@ fn credential_issue_example() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::openapi_document;
+    use super::{openapi_document, set_response_example};
     use serde_json::json;
 
     #[test]
@@ -1117,6 +1150,89 @@ mod tests {
             doc["paths"]["/evidence/render"]["post"]["responses"]["404"]["content"]
                 ["application/problem+json"]["example"]["code"],
             json!("evaluation.not_found")
+        );
+    }
+
+    #[test]
+    fn problem_responses_reference_shared_problem_details_schema() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        assert!(doc["components"]["schemas"]["ProblemDetails"].is_object());
+
+        for (path, method, status) in [
+            ("/claims/evaluate", "post", "400"),
+            ("/claims/evaluate", "post", "401"),
+            ("/claims/evaluate", "post", "403"),
+            ("/credentials/issue", "post", "404"),
+        ] {
+            assert_eq!(
+                doc["paths"][path][method]["responses"][status]["content"]
+                    ["application/problem+json"]["schema"]["$ref"],
+                json!("#/components/schemas/ProblemDetails"),
+                "problem response schema must reference the shared component for {method} {path} {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn response_example_patcher_noops_when_target_shape_is_missing() {
+        let mut doc = json!({
+            "paths": {
+                "/demo": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "plain response",
+                                "content": {
+                                    "text/plain": {}
+                                }
+                            },
+                            "400": {
+                                "description": "problem response",
+                                "content": {
+                                    "application/problem+json": "not an object"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        set_response_example(
+            &mut doc,
+            "/missing",
+            "get",
+            "200",
+            "Missing path",
+            "application/json",
+            json!({ "ignored": true }),
+        );
+        set_response_example(
+            &mut doc,
+            "/demo",
+            "get",
+            "200",
+            "JSON response",
+            "application/json",
+            json!({ "ignored": true }),
+        );
+        set_response_example(
+            &mut doc,
+            "/demo",
+            "get",
+            "400",
+            "Problem response",
+            "application/problem+json",
+            json!({ "ignored": true }),
+        );
+
+        assert!(
+            doc["paths"]["/demo"]["get"]["responses"]["200"]["content"]["application/json"]
+                .is_null()
+        );
+        assert_eq!(
+            doc["paths"]["/demo"]["get"]["responses"]["400"]["content"]["application/problem+json"],
+            json!("not an object")
         );
     }
 
