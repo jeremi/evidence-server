@@ -1993,6 +1993,8 @@ pub struct DciSourceConnectionConfig {
     pub search_path: String,
     #[serde(default = "default_dci_sender_id")]
     pub sender_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_id: Option<String>,
     #[serde(default = "default_dci_query_type")]
     pub query_type: String,
     #[serde(default = "default_dci_records_path")]
@@ -2012,6 +2014,8 @@ pub struct DciSourceConnectionConfig {
     pub record_type: Option<String>,
     #[serde(default)]
     pub field_paths: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl Default for DciSourceConnectionConfig {
@@ -2019,6 +2023,7 @@ impl Default for DciSourceConnectionConfig {
         Self {
             search_path: default_dci_search_path(),
             sender_id: default_dci_sender_id(),
+            receiver_id: None,
             query_type: default_dci_query_type(),
             records_path: default_dci_records_path(),
             bulk_records_path: default_dci_bulk_records_path(),
@@ -2026,6 +2031,7 @@ impl Default for DciSourceConnectionConfig {
             registry_type: None,
             record_type: None,
             field_paths: BTreeMap::new(),
+            signature: None,
         }
     }
 }

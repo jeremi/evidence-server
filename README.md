@@ -25,6 +25,9 @@ but Registry Witness does not import or link Registry Relay code.
   jobs behind Registry Witness source lookups.
 - `demo/config/registry-witness.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Witness walkthrough.
+- [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
+  OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
+  and demo SD-JWT VC caveats.
 
 ## Credential Conformance
 

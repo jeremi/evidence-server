@@ -128,6 +128,20 @@ async fn dci_source(
         return StatusCode::BAD_REQUEST.into_response();
     }
     *observed.lock().expect("observed request lock") = Some(body.clone());
+    if body["message"]["search_request"][0]["search_criteria"]["query"]["value"]
+        == "openspp-missing"
+    {
+        return Json(json!({
+            "message": {
+                "search_response": [{
+                    "status": "rjct",
+                    "status_reason_code": "REG-ERR-001",
+                    "status_reason_message": "REGISTER_NOT_FOUND: No registrant found for identifier 'openspp-missing'"
+                }]
+            }
+        }))
+        .into_response();
+    }
     if body["message"]["search_request"][0]["search_criteria"]["query"]["value"] != "person-1" {
         return Json(json!({
             "message": {
@@ -164,6 +178,8 @@ fn config(
       dci:
         search_path: /dci/fr/registry/sync/search
         query_type: idtype-value
+        receiver_id: upstream-registry
+        signature: ""
         records_path: /message/search_response/0/data/reg_records
         field_paths:
           farmed_land_size_hectares: /farmed_land_size_hectares"#
@@ -1742,6 +1758,8 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
         .clone()
         .expect("DCI request captured");
     assert_eq!(observed["header"]["action"], "search");
+    assert_eq!(observed["header"]["receiver_id"], "upstream-registry");
+    assert_eq!(observed["signature"], "");
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query_type"],
         "idtype-value"
@@ -1754,6 +1772,51 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
         observed["message"]["search_request"][0]["search_criteria"]["query"]["value"],
         "person-1"
     );
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-witness-cel")]
+async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/dci/fr/registry/sync/search", post(dci_source))
+            .with_state(Arc::new(Mutex::new(None))),
+    );
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(dci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/claims/evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "subject": { "id": "openspp-missing" },
+            "claims": ["farmer-under-4ha"],
+            "disclosure": "predicate"
+        }))
+        .await;
+
+    response.assert_status(StatusCode::NOT_FOUND);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("source.not_found"));
 }
 
 #[tokio::test]

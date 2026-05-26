@@ -1619,9 +1619,11 @@ async fn read_external_dci_http_one(
         .json(&request_body)
     })
     .await?;
-    let rows = get_json_path(&body, &connection.dci.records_path)
-        .and_then(Value::as_array)
-        .ok_or(EvidenceError::SourceUnavailable)?;
+    let rows = match get_json_path(&body, &connection.dci.records_path).and_then(Value::as_array) {
+        Some(rows) => rows,
+        None if dci_search_response_not_found(&body) => return Err(EvidenceError::SourceNotFound),
+        None => return Err(EvidenceError::SourceUnavailable),
+    };
     match rows.len() {
         0 => Err(EvidenceError::SourceNotFound),
         1 => project_dci_record(connection, binding, &lookup_value, &rows[0]),
@@ -1848,7 +1850,7 @@ async fn read_external_dci_http_many(
             .collect();
     }
     let message_id = Ulid::new().to_string();
-    let request_body = json!({
+    let mut request_body = json!({
         "header": {
             "message_id": message_id,
             "message_ts": timestamp,
@@ -1862,6 +1864,7 @@ async fn read_external_dci_http_many(
             "search_request": search_request,
         },
     });
+    add_dci_envelope_options(&connection.dci, &mut request_body);
     let timeout_budget = bulk_timeout(connection, n_valid);
     let request_url = url.clone();
     let body_result = send_request_with_retry(sources, connection, "dci_bulk", &url, move || {
@@ -2190,7 +2193,7 @@ fn dci_search_request_body(
             Value::String(record_type.clone()),
         );
     }
-    Ok(json!({
+    let mut body = json!({
         "header": {
             "message_id": message_id,
             "message_ts": timestamp,
@@ -2207,7 +2210,46 @@ fn dci_search_request_body(
                 "search_criteria": Value::Object(search_criteria),
             }],
         },
-    }))
+    });
+    add_dci_envelope_options(dci, &mut body);
+    Ok(body)
+}
+
+fn add_dci_envelope_options(dci: &DciSourceConnectionConfig, body: &mut Value) {
+    if let Some(receiver_id) = &dci.receiver_id {
+        body.pointer_mut("/header")
+            .and_then(Value::as_object_mut)
+            .expect("DCI header is an object")
+            .insert(
+                "receiver_id".to_string(),
+                Value::String(receiver_id.clone()),
+            );
+    }
+    if let Some(signature) = &dci.signature {
+        body.as_object_mut()
+            .expect("DCI request body is an object")
+            .insert("signature".to_string(), Value::String(signature.clone()));
+    }
+}
+
+fn dci_search_response_not_found(body: &Value) -> bool {
+    body.pointer("/message/search_response/0")
+        .is_some_and(dci_entry_not_found)
+}
+
+fn dci_entry_not_found(entry: &Value) -> bool {
+    let status = entry.get("status").and_then(Value::as_str);
+    let reason_code = entry.get("status_reason_code").and_then(Value::as_str);
+    let reason_message = entry
+        .get("status_reason_message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    status == Some("rjct")
+        && (reason_code == Some("REG-ERR-001")
+            || reason_message.contains("register_not_found")
+            || reason_message.contains("not found"))
 }
 
 fn project_dci_record(
@@ -2590,8 +2632,12 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-    job: "{}"
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      steps:
+        - id: lookup
+          expression: "{}"
+          adaptors:
+            - "@openfn/language-http@7.2.0"
     credential_env: TEST_OPENCRVS_READER_CREDENTIAL_JSON
     smoke_lookup:
       field: national_id
