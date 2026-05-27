@@ -149,6 +149,23 @@ impl SelfAttestationRateLimitKeys {
         self.hash_identifier("subject_binding", subject_binding)
     }
 
+    pub fn subject_ref(
+        &self,
+        id_type: &str,
+        subject_ref: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+        if subject_ref.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "subject_ref identifier is empty".to_string(),
+            });
+        }
+        let hashed = self
+            .hasher
+            .hash(&format!("registry-witness:subject-ref:{id_type}:{subject_ref}"));
+        ensure_bounded(&hashed)?;
+        Ok(Hashed::from_hash(hashed))
+    }
+
     pub fn oid4vci_nonce(
         &self,
         issuer: &str,

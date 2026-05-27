@@ -1191,6 +1191,7 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         .first()
         .expect("at least one result")
         .subject_ref
+        .hash
         .as_str();
     let signed_1 = sd_jwt_issue(&profile, &issuer, &results, subject_ref, None, iat_anchor)
         .expect("first sd-jwt issuance");

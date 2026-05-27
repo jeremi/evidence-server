@@ -1441,7 +1441,7 @@ async fn issue_credential(
             evaluation
                 .results
                 .first()
-                .map(|result| result.subject_ref.as_str())
+                .map(|result| result.subject_ref.hash.as_str())
         }) {
             Some(subject_ref) => subject_ref,
             None => return evidence_error_response(EvidenceError::InvalidRequest),
