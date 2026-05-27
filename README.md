@@ -68,8 +68,8 @@ running Cargo jobs. Private platform checkouts require a repository secret named
 `REGISTRY_PLATFORM_TOKEN`.
 
 CEL is enabled by default through the `registry-witness-cel` feature and is
-implemented through `cel-mapper-core`, pinned to the published
-`cel-mapper-core-v0.1.1` tag in `PublicSchema/cel-mapping`.
+implemented through the local `crosswalk-core` crate at
+`../cel-mapping/crates/crosswalk-core`.
 
 ## Docker
 

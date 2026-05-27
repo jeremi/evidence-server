@@ -28,7 +28,7 @@ fn app(config: StandaloneRegistryWitnessConfig) -> Result<axum::Router, Standalo
 
 - Default: `registry-witness-cel`.
 - `registry-witness-cel`: enables CEL-backed claim expression evaluation through
-  `cel-mapper-core`.
+  `crosswalk-core`.
 
 Run server tests without default features when checking the non-CEL binary
 shape:
