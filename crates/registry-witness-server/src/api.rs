@@ -736,7 +736,9 @@ async fn oid4vci_credential(
         holder_id,
         Some(holder_id),
         iat,
-    ) {
+    )
+    .await
+    {
         Ok(signed) => signed,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
@@ -1459,7 +1461,9 @@ async fn issue_credential(
         subject_ref,
         holder_id,
         iat,
-    ) {
+    )
+    .await
+    {
         Ok(signed) => signed,
         Err(error) => return evidence_error_response(error),
     };

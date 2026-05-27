@@ -107,17 +107,22 @@ fn benchmark_issue_single_claim(c: &mut Criterion) {
     let issuer = build_issuer();
     let results = build_single_claim();
     let iat = OffsetDateTime::UNIX_EPOCH;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime builds");
     c.bench_function("sd_jwt/issue_single_claim", |b| {
         b.iter(|| {
-            issue(
-                black_box(&profile),
-                black_box(&issuer),
-                black_box(&results),
-                black_box("bench-subject"),
-                black_box(None),
-                black_box(iat),
-            )
-            .expect("issue must succeed")
+            runtime
+                .block_on(issue(
+                    black_box(&profile),
+                    black_box(&issuer),
+                    black_box(&results),
+                    black_box("bench-subject"),
+                    black_box(None),
+                    black_box(iat),
+                ))
+                .expect("issue must succeed")
         });
     });
 }
@@ -127,17 +132,22 @@ fn benchmark_issue_three_claims(c: &mut Criterion) {
     let issuer = build_issuer();
     let results = build_three_claims();
     let iat = OffsetDateTime::UNIX_EPOCH;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime builds");
     c.bench_function("sd_jwt/issue_three_claims", |b| {
         b.iter(|| {
-            issue(
-                black_box(&profile),
-                black_box(&issuer),
-                black_box(&results),
-                black_box("bench-subject"),
-                black_box(None),
-                black_box(iat),
-            )
-            .expect("issue must succeed")
+            runtime
+                .block_on(issue(
+                    black_box(&profile),
+                    black_box(&issuer),
+                    black_box(&results),
+                    black_box("bench-subject"),
+                    black_box(None),
+                    black_box(iat),
+                ))
+                .expect("issue must succeed")
         });
     });
 }

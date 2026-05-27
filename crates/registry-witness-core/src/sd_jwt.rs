@@ -64,12 +64,12 @@ impl EvidenceIssuer {
     }
 
     pub fn from_jwk_str(raw: &str, verification_method_id: String) -> Result<Self, EvidenceError> {
-        let jwk = PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-        let mut public = jwk.public();
-        public.kid = Some(verification_method_id.clone());
-        public
-            .alg
+        let mut jwk =
+            PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        jwk.kid = Some(verification_method_id.clone());
+        jwk.alg
             .get_or_insert_with(|| SD_JWT_VC_SIGNING_ALG.to_string());
+        let public = jwk.public();
         let public_jwk =
             serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         let issuer =
@@ -87,7 +87,7 @@ impl EvidenceIssuer {
     }
 }
 
-pub fn issue(
+pub async fn issue(
     profile: &CredentialProfileConfig,
     issuer: &EvidenceIssuer,
     results: &[ClaimResultView],
@@ -125,10 +125,10 @@ pub fn issue(
             iat: iat.unix_timestamp(),
             exp: expires_at.unix_timestamp(),
             vct: profile.vct.clone(),
-            signing_kid: issuer.verification_method_id.clone(),
             cnf: holder_confirmation,
             disclosures,
         })
+        .await
         .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
     let (issuer_signed_jwt, disclosures) = split_sd_jwt_compact(&signed.jwt)?;
     Ok(SignedSdJwtVc {
@@ -186,6 +186,28 @@ mod tests {
     use std::collections::BTreeMap;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+    fn issue(
+        profile: &CredentialProfileConfig,
+        issuer: &EvidenceIssuer,
+        results: &[ClaimResultView],
+        subject_ref: &str,
+        holder_id: Option<&str>,
+        iat: OffsetDateTime,
+    ) -> Result<SignedSdJwtVc, EvidenceError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime builds")
+            .block_on(super::issue(
+                profile,
+                issuer,
+                results,
+                subject_ref,
+                holder_id,
+                iat,
+            ))
+    }
 
     #[test]
     fn signing_algorithm_header_value_is_stable() {

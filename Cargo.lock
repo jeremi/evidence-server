@@ -2451,6 +2451,7 @@ dependencies = [
 name = "registry-platform-crypto"
 version = "0.1.2"
 dependencies = [
+ "async-trait",
  "base64",
  "ed25519-dalek",
  "hmac 0.13.0",
@@ -2515,6 +2516,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-replay"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "registry-platform-sdjwt"
 version = "0.1.2"
 dependencies = [
@@ -2544,8 +2554,11 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oid4vci",
  "registry-platform-oidc",
+ "registry-platform-replay",
  "reqwest",
  "serde_json",
+ "thiserror 2.0.18",
+ "time",
  "tokio",
  "tower",
  "wiremock",
@@ -2580,6 +2593,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "ulid",
  "utoipa",
 ]
