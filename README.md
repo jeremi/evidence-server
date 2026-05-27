@@ -30,6 +30,12 @@ but Registry Witness does not import or link Registry Relay code.
 - [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
   OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
   and demo SD-JWT VC caveats.
+- [`docs/federated-witness-manifest-spec.md`](docs/federated-witness-manifest-spec.md):
+  Registry Manifest-backed federation, peer discovery, trust, delegated
+  evaluation, credential issuance, and audit checkpoint design.
+- [`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md):
+  first practical federation slice for static-peer, signed delegated
+  evaluation.
 
 ## Credential Conformance
 

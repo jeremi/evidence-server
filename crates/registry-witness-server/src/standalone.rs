@@ -81,6 +81,7 @@ pub fn standalone_router(
     let evidence = Arc::new(config.evidence.clone());
     let self_attestation = Arc::new(config.self_attestation.clone());
     let oid4vci = Arc::new(config.oid4vci.clone());
+    let federation = Arc::new(config.federation.clone());
     let source = Arc::new(HttpEvidenceSources::from_config(&config.evidence)?);
     let store = Arc::new(EvidenceStore::default());
     let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
@@ -93,19 +94,23 @@ pub fn standalone_router(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config)?);
-    let api_state = Arc::new(
-        RegistryWitnessApiState::new_with_self_attestation_and_oid4vci_hasher(
-            evidence,
-            self_attestation,
-            oid4vci,
-            auth_state.audit.hasher.clone(),
-            source,
-            store,
-            issuers,
-        ),
-    );
+    let api_state = Arc::new(RegistryWitnessApiState::new_with_federation(
+        evidence,
+        self_attestation,
+        oid4vci,
+        federation,
+        auth_state.audit.hasher.clone(),
+        config.federation.enabled.then(|| auth_state.audit.clone()),
+        source,
+        store,
+        issuers,
+    )?);
+    let mut routes = router();
+    if config.federation.enabled {
+        routes = routes.merge(crate::api::federation_router());
+    }
 
-    Ok(router()
+    Ok(routes
         .layer(axum::Extension(Arc::clone(&api_state)))
         .layer(from_fn_with_state(auth_state, auth_audit_middleware))
         .layer(from_fn_with_state(
@@ -271,6 +276,10 @@ pub enum StandaloneServerError {
     MissingSourceTokenEnv(String),
     #[error("credential issuer environment variable is missing or invalid: {0}")]
     InvalidIssuerEnv(String),
+    #[error("federation secret environment variable is missing or empty: {0}")]
+    MissingFederationSecretEnv(String),
+    #[error("federation signing key environment variable is invalid: {0}: {1}")]
+    InvalidFederationSigningKeyEnv(String, String),
     #[error("audit sink path is required when sink=file")]
     MissingAuditPath,
     #[error("audit.hash_secret_env is required")]
@@ -285,6 +294,8 @@ pub enum StandaloneServerError {
     HttpClient(#[source] reqwest::Error),
     #[error("invalid OIDC auth configuration: {0}")]
     InvalidOidcConfig(String),
+    #[error("invalid federation configuration: {0}")]
+    InvalidFederationConfig(String),
 }
 
 #[derive(Clone)]
@@ -794,7 +805,7 @@ impl Authenticator {
 }
 
 #[derive(Clone)]
-struct AuditPipeline {
+pub(crate) struct AuditPipeline {
     sink: Arc<dyn PlatformAuditSink>,
     chain: Arc<OnceCell<ChainState>>,
     hasher: AuditKeyHasher,
@@ -845,7 +856,11 @@ impl AuditPipeline {
         }
     }
 
-    async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
+    pub(crate) fn hash_principal(&self, value: &str) -> Hashed<PrincipalIdentifier> {
+        Hashed::from_hash(self.hasher.hash(value))
+    }
+
+    pub(crate) async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
         let chain = self
             .chain
             .get_or_try_init(|| async { ChainState::bootstrap(self.sink.as_ref()).await })
@@ -1034,6 +1049,7 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/.well-known/openid-credential-issuer"
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
+            | "/federation/v1/evaluations"
     )
 }
 
@@ -1090,6 +1106,12 @@ fn build_audit_event(
         row_count,
         error_code,
         access_mode,
+        federation_peer_id_hash: None,
+        federation_issuer: None,
+        federation_profile: None,
+        federation_purpose: None,
+        federation_request_jti: None,
+        federation_subject_ref_hash: None,
         denial_code,
         token_claim_name,
         correlation_id: Some(correlation_id),
@@ -1518,7 +1540,7 @@ async fn rewrite_payload_too_large_problem(request: Request, next: Next) -> Resp
     registry_platform_httpsec::body_limit_problem_response(Request::new(Body::empty())).await
 }
 
-fn audit_error_response(error: AuditError) -> Response {
+pub(crate) fn audit_error_response(error: AuditError) -> Response {
     tracing::error!(target: "registry_witness_server::audit", error = %error, "audit event write failed");
     let status = StatusCode::INTERNAL_SERVER_ERROR;
     let mut response = (
@@ -2408,6 +2430,12 @@ mod tests {
             row_count: None,
             error_code: None,
             access_mode: Some(AccessMode::MachineClient),
+            federation_peer_id_hash: None,
+            federation_issuer: None,
+            federation_profile: None,
+            federation_purpose: None,
+            federation_request_jti: None,
+            federation_subject_ref_hash: None,
             denial_code: None,
             token_claim_name: None,
             correlation_id: None,
