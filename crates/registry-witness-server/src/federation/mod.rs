@@ -221,7 +221,12 @@ async fn handle_federated_evaluate(
     let request = EvaluateRequest {
         subject: subject.clone(),
         claims: vec![profile.claim_id.clone()],
-        disclosure: Some("predicate".to_string()),
+        disclosure: Some(
+            profile
+                .disclosure
+                .clone()
+                .unwrap_or_else(|| "predicate".to_string()),
+        ),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some(purpose.clone()),
     };

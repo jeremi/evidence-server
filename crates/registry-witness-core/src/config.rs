@@ -12,7 +12,9 @@ use registry_platform_oid4vci::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG};
+use crate::model::{
+    DisclosureProfile, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -372,13 +374,25 @@ impl FederationConfig {
                 "federation.evaluation_profiles[].subject_id_type",
                 &profile.subject_id_type,
             )?;
+            if let Some(disclosure) = profile.disclosure.as_deref() {
+                if DisclosureProfile::parse(disclosure).is_none() {
+                    return invalid_federation(
+                        "federation.evaluation_profiles[].disclosure must be value, predicate, or redacted",
+                    );
+                }
+            }
         }
         let mut peer_nodes = HashSet::new();
         for peer in &self.peers {
             validate_federation_non_empty("federation.peers[].node_id", &peer.node_id)?;
             validate_federation_non_empty("federation.peers[].issuer", &peer.issuer)?;
             validate_federation_https_url("federation.peers[].issuer", &peer.issuer)?;
-            if peer.allow_insecure_localhost {
+            if peer.allow_insecure_private_network {
+                validate_federation_http_or_https_url(
+                    "federation.peers[].jwks_uri",
+                    &peer.jwks_uri,
+                )?;
+            } else if peer.allow_insecure_localhost {
                 validate_federation_localhost_or_https_url(
                     "federation.peers[].jwks_uri",
                     &peer.jwks_uri,
@@ -529,6 +543,8 @@ pub struct FederationPeerConfig {
     #[serde(default)]
     pub allow_insecure_localhost: bool,
     #[serde(default)]
+    pub allow_insecure_private_network: bool,
+    #[serde(default)]
     pub allowed_protocol_versions: Vec<String>,
     #[serde(default)]
     pub allowed_purposes: Vec<String>,
@@ -545,6 +561,8 @@ pub struct FederationEvaluationProfileConfig {
     pub ruleset: String,
     pub claim_id: String,
     pub subject_id_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disclosure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_source_observed_age_seconds: Option<u64>,
 }
@@ -2063,6 +2081,24 @@ fn validate_federation_localhost_or_https_url(
     }
 }
 
+fn validate_federation_http_or_https_url(
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    validate_federation_non_empty(field, value)?;
+    let Some(rest) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return invalid_federation(format!("{field} must be an HTTP or HTTPS URL"));
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.is_empty() || host.contains('@') {
+        return invalid_federation(format!("{field} must include a valid host"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvidenceConfigError {
     #[error("evidence.enabled must be true for the standalone Registry Witness")]
@@ -2970,6 +3006,7 @@ credential_configurations:
                 ruleset: "disability-status-v1".to_string(),
                 claim_id: "disability-status".to_string(),
                 subject_id_type: "national_id".to_string(),
+                disclosure: Some("predicate".to_string()),
                 max_source_observed_age_seconds: Some(300),
             }],
             ..FederationConfig::default()
@@ -2982,6 +3019,42 @@ credential_configurations:
         valid_federation_config()
             .validate()
             .expect("federation config validates");
+    }
+
+    #[test]
+    fn federation_peer_private_network_jwks_escape_hatch_deserializes_and_validates() {
+        let mut config = valid_federation_config();
+        let peer: FederationPeerConfig = serde_norway::from_str(
+            r#"
+node_id: did:web:agency-b.example.gov
+issuer: https://agency-b.example.gov
+jwks_uri: http://federation-peer-jwks:8080/jwks.json
+allow_insecure_private_network: true
+allowed_protocol_versions:
+  - registry-witness-federation/v0.1
+allowed_purposes:
+  - https://purpose.example.gov/social-protection/service-delivery
+allowed_profiles:
+  - disability_status_predicate
+source_scopes:
+  - civil_registry:evidence_verification
+"#,
+        )
+        .expect("private-network peer YAML parses");
+        assert!(peer.allow_insecure_private_network);
+        config.federation.peers = vec![peer];
+        config
+            .validate()
+            .expect("private-network peer JWKS is accepted only with explicit opt-in");
+    }
+
+    #[test]
+    fn federation_peer_http_private_network_jwks_requires_escape_hatch() {
+        let mut config = valid_federation_config();
+        config.federation.peers[0].jwks_uri =
+            "http://federation-peer-jwks:8080/jwks.json".to_string();
+        let reason = expect_federation_error(&config);
+        assert!(reason.contains("jwks_uri must be an HTTPS URL"));
     }
 
     #[test]
@@ -3006,6 +3079,14 @@ credential_configurations:
         bad_profile.federation.evaluation_profiles[0].claim_id = "unknown".to_string();
         let reason = expect_federation_error(&bad_profile);
         assert!(reason.contains("claim_id must reference"));
+    }
+
+    #[test]
+    fn federation_profile_disclosure_must_be_known_profile() {
+        let mut config = valid_federation_config();
+        config.federation.evaluation_profiles[0].disclosure = Some("raw".to_string());
+        let reason = expect_federation_error(&config);
+        assert!(reason.contains("disclosure must be value, predicate, or redacted"));
     }
 
     // -----------------------------------------------------------------------

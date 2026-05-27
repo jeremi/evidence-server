@@ -62,6 +62,8 @@ federation:
     - node_id: did:web:agency-b.example.gov
       issuer: https://agency-b.example.gov
       jwks_uri: https://agency-b.example.gov/.well-known/jwks.json
+      # Local Compose demos may use allow_insecure_private_network: true with
+      # an HTTP service URL. Production peer JWKS URLs must use HTTPS.
       allowed_protocol_versions:
         - registry-witness-federation/v0.1
       allowed_purposes:
@@ -80,6 +82,11 @@ federation:
 
 The local `peers` block is authoritative. Manifest metadata helps partners
 configure each other, but it does not grant access.
+
+`allow_insecure_private_network` is a development and lab escape hatch for
+private Compose networks. It allows HTTP peer JWKS fetches through the shared
+bounded-fetch policy while still blocking cloud metadata targets. Do not enable
+it for production federation.
 
 ## Request Requirements
 

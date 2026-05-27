@@ -125,6 +125,8 @@ federation:
     - node_id: did:web:agency-b.example.gov
       issuer: https://agency-b.example.gov
       jwks_uri: https://agency-b.example.gov/.well-known/jwks.json
+      # Local Compose demos may use allow_insecure_private_network: true with
+      # an HTTP service URL. Production peer JWKS URLs must use HTTPS.
       allowed_protocol_versions:
         - registry-witness-federation/v0.1
       allowed_purposes:
@@ -138,6 +140,7 @@ federation:
       ruleset: disability-status-v1
       claim_id: disability_status
       subject_id_type: national_id
+      disclosure: predicate
       max_source_observed_age_seconds: 3600
   replay:
     storage: in_process_single_instance_only
@@ -152,6 +155,10 @@ federation:
 
 The local peer policy is authoritative. If Manifest says a profile exists but
 local config does not allow it, the request is denied.
+
+`allow_insecure_private_network` is permitted only as an explicit lab or
+development escape hatch for peer JWKS fetches on private Compose networks. It
+must not be enabled for production federation.
 
 MVP `node_id` and `issuer` are both required and must be bound. When `node_id`
 uses `did:web`, the DID host component must match the `issuer` HTTPS origin
@@ -316,7 +323,9 @@ auditable even when the source observation is too old:
 ### Disclosure Limits
 
 V1 allows only configured predicate or value disclosure. Raw source records are
-out of scope.
+out of scope. If `evaluation_profiles[].disclosure` is omitted, the runtime
+uses `predicate`; value disclosures such as age band must opt in explicitly with
+`disclosure: value`.
 
 ### Pairwise Subject Reference
 

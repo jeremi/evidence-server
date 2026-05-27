@@ -54,8 +54,9 @@ The missing pieces are:
 2. A signed manifest or signed federation document that peers can verify before
    relying on published capabilities.
 3. Witness runtime support for consuming peer metadata, validating trust,
-   enforcing local allow policies, accepting delegated evaluation requests, and
-   returning signed results.
+   enforcing local allow policies, accepting delegated evaluation requests,
+   sending delegated evaluation requests, composing signed peer evaluations into
+   local claim workflows, and returning signed results.
 4. Audit checkpoint publication so peers can verify continuity without seeing
    raw audit logs.
 
@@ -119,7 +120,9 @@ ambiguity from later stages:
 | Evidence offering | Manifest declaration that a node can provide evidence for a dataset/entity through a named access mechanism |
 | Evaluation profile | Public profile for a signed claim-evaluation output, including output format, subject entity, lookup keys, and `ruleset` |
 | Credential profile | Public profile for an issued credential output, including `vct`, output format, holder-binding requirements, and `ruleset` |
+| User-presented proof | A credential, SD-JWT disclosure, or verifiable presentation supplied by a holder or client to a Witness for local verification and rule evaluation |
 | Ruleset | Public stable identifier that binds an offering/profile to private Witness runtime claim configuration |
+| Outbound composition | A Witness workflow that calls trusted peer Witnesses for signed evaluations and uses those verified results as local rule inputs |
 | Peer | A configured Witness node allowed or denied by local policy |
 | Trust bundle | Signed public statement that can help validate peer metadata in later stages; not an allowlist by itself |
 
@@ -133,7 +136,7 @@ ambiguity from later stages:
 | Registry Platform | Supplies reusable crypto, auth, HTTP, audit, and test-fixture primitives |
 | Trust Anchor | Signs or publishes trust-bundle statements for participating nodes |
 | Registry Relay | Optionally hosts or aggregates published metadata artifacts |
-| Holder or Client | Presents a credential or requests a local Witness workflow that may depend on remote evidence |
+| Holder or Client | Presents a proof or requests a local Witness workflow that may depend on remote evidence |
 
 ## Non-Goals
 
@@ -915,6 +918,156 @@ levels, use an elevated audit event type, and have separate privacy review.
 `max_source_observed_age_seconds` policy. Stale source observations are denied
 or returned as per-subject errors in batch responses.
 
+## Outbound Delegated Evaluation And Composition
+
+Delegated evaluation has two runtime directions:
+
+1. Inbound serving: a Witness accepts a signed peer request, evaluates a local
+   ruleset against its own source connectors, and returns a signed response.
+2. Outbound composition: a Witness signs requests to trusted peer Witnesses,
+   verifies their signed responses, and exposes the verified result to its own
+   local claim graph as a typed input.
+
+Outbound composition must be modeled as a Witness source connector, not as raw
+HTTP inside a rule expression. A future connector shape should be explicit about
+the peer, profile, purpose, subject mapping, and failure policy:
+
+```yaml
+source_bindings:
+  civil_alive:
+    connector: registry_witness_federation
+    peer: civil-witness
+    profile: civil_alive_predicate
+    purpose: https://purpose.example.gov/social-protection/service-delivery
+    subject:
+      input: subject_id
+      id_type: national_id
+    result:
+      claim: person-is-alive
+      disclosure: predicate
+    on_denial: evaluation_error
+    on_timeout: evaluation_error
+```
+
+The composing Witness must verify each peer response before rule evaluation:
+
+- response `typ`, `alg`, `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, and
+  `request_jti`;
+- response signature against the serving peer's configured or discovered JWKS;
+- selected protocol against signed metadata and local peer policy;
+- profile, purpose, action, and ruleset mapping against local policy;
+- `source_observed_at` freshness for the selected profile;
+- denial or error semantics before the peer result is exposed to CEL bindings.
+
+Peer evaluation results become local runtime facts. They must not be treated as
+raw registry rows, and they must not bypass the local disclosure, audit,
+purpose, or credential-profile checks of the composing Witness.
+
+```mermaid
+sequenceDiagram
+  participant S as Shared Eligibility Witness
+  participant C as Civil Witness
+  participant P as Social Protection Witness
+  participant H as Health Witness
+
+  S->>C: Signed request for civil_alive_predicate
+  C-->>S: Signed predicate result
+  S->>P: Signed request for beneficiary_active_predicate
+  P-->>S: Signed predicate result
+  S->>H: Signed request for health_service_available_predicate
+  H-->>S: Signed predicate result
+  S->>S: Verify peer responses and compose final claim
+```
+
+Audit must distinguish:
+
+- inbound federated evaluations served to peers;
+- outbound federated evaluations requested from peers;
+- local composed evaluations that used one or more peer-signed inputs.
+
+If a composed workflow later issues a credential, the credential represents the
+composing Witness's decision. It must retain audit links to the remote
+evaluation response ids or request ids without embedding raw remote source
+facts.
+
+## User-Presented Proof As Evidence
+
+User-presented proof is a separate federation-adjacent flow from delegated
+evaluation and federated credential issuance. In this flow, the holder or client
+brings an existing credential, SD-JWT disclosure, or verifiable presentation to
+a consuming Witness. The consuming Witness verifies the proof locally and maps
+accepted claims into its own claim graph.
+
+The issuing Witness is not necessarily online during the presentation. It is
+contacted only when the selected proof profile requires fresh metadata, status,
+revocation, or trust material.
+
+```mermaid
+sequenceDiagram
+  participant H as Holder or Client
+  participant C as Consuming Witness
+  participant I as Issuing Witness
+
+  H->>C: Present credential, SD-JWT disclosure, or VP
+  C->>C: Verify signature, holder binding, audience, nonce, expiry
+  C->>I: Optional status or trust-material fetch
+  I-->>C: Verification material
+  C->>C: Apply status policy
+  C->>C: Map verified claims into local rule inputs
+```
+
+User-presented proof profiles must be explicit. Ordinary claim evaluation must
+not accept arbitrary remote credentials just because their issuer is known. A
+profile must define:
+
+- accepted issuer or trust framework;
+- accepted `vct`, schema, or credential profile id;
+- required disclosures and claim paths;
+- holder-binding requirement and allowed DID methods;
+- presentation `aud`, nonce, `iat`, `nbf`, `exp`, and replay rules;
+- credential status and freshness policy;
+- mapping from verified proof claims to local typed rule inputs;
+- redaction rules for audit and logs.
+
+Representation is a separate boundary from holder binding. Possession of a
+credential about a subject does not prove the presenter is authorized to act for
+that subject. Until representation profiles are implemented, a Witness proof
+profile must reject presentations where the actor or holder is not the evidence
+subject, unless an upstream authorization layer has already made and audited the
+representation decision outside Witness.
+
+Profiles that support parent, guardian, power-of-attorney, case-worker, or
+household-representative flows must define:
+
+- `actor_ref`: the presenter or requester;
+- `subject_ref`: the represented person, household, group, cooperative,
+  organization, asset, or legal entity the evidence is about;
+- `subject_kind`: the represented subject class, such as `person`,
+  `household`, `group`, `farm`, `cooperative`, `organization`, `asset`, or
+  `legal_entity`;
+- `representation_ref`: the credential, capability, assignment, or policy
+  record that authorizes the actor to act for the subject;
+- accepted representation issuers or trust frameworks;
+- accepted relationship or authority types, such as `parent`,
+  `legal_guardian`, `case_worker_assignment`, `power_of_attorney`, or
+  `household_representative`;
+- member-scoping rules when a collective subject contains people whose evidence
+  may be used by the workflow;
+- scope and purpose matching rules;
+- expiry, status, and revocation requirements for the representation proof;
+- privacy-preserving audit fields for actor, subject, and representation
+  references.
+
+Accepted proof claims become local runtime facts. They must not bypass the
+consuming Witness's local purpose, disclosure, rule, credential-profile, or
+audit policies.
+
+Audit records for user-presented proof must record issuer, profile, proof type,
+status-policy result, presentation id or nonce hash, and redacted subject hash.
+They must not log compact proof tokens, full SD-JWT disclosures, bearer tokens,
+holder private material, or raw credential payloads unless a profile explicitly
+allows raw evidence capture and the deployment enables elevated audit controls.
+
 ## Federated Credential Issuance
 
 Credential issuance builds on delegated evaluation. A peer may request a
@@ -937,6 +1090,12 @@ rewrite proof `aud`, or claim to have verified an issuer nonce. If the consuming
 Witness needs a server-held credential for its own workflow, that must be a
 separate credential profile where the consuming Witness is the holder and the
 proof is addressed directly to the issuing Witness.
+
+Credential issuance profiles must define the holder-binding ceremony before
+they are enabled. The ceremony definition must specify who creates `c_nonce`,
+which issuer or endpoint appears in the holder proof `aud`, how nonce replay is
+detected, which bytes a transparent relay may forward, and how holder DID,
+proof JWT, nonce, and credential offer identifiers are redacted from logs.
 
 The issuing Witness returns an SD-JWT VC or an OpenID4VCI-compatible credential
 response, depending on the profile. The credential issuer remains the issuing
@@ -1152,6 +1311,8 @@ Known residual risks:
   node's local audit trail;
 - audit checkpoints without inclusion proofs can detect some discontinuities but
   do not fully prevent audit equivocation;
+- user-presented proof creates a replay and over-disclosure surface unless
+  presentation nonce, `aud`, status policy, and audit redaction are enforced;
 - transparent byte relay for credential issuance exposes holder-interaction
   metadata to the relaying Witness and needs strict log minimization.
 
@@ -1165,13 +1326,15 @@ flowchart LR
   S3["Stage 3: Peer discovery"]
   S3b["Stage 3b: Shared replay"]
   S4["Stage 4: Delegated evaluation"]
-  S5["Stage 5: Credential issuance"]
-  S6["Stage 6: Audit checkpoints"]
+  S5["Stage 5: User-presented proof"]
+  S6["Stage 6: Credential issuance"]
+  S7["Stage 7: Audit checkpoints"]
 
   S0 --> S1 --> S2 --> S3
   S3 --> S3b --> S4
   S4 --> S5
-  S4 --> S6
+  S5 --> S6
+  S4 --> S7
 ```
 
 ### Stage 0: Spec And Fixture Alignment
@@ -1270,16 +1433,52 @@ Definition of Done:
 - signed request envelope verification is required;
 - local peer policy gates action, purpose, profile, and batch size;
 - source reads occur only after peer policy succeeds;
+- outbound delegated evaluation uses a dedicated `registry_witness_federation`
+  source connector or equivalent runtime abstraction, not ad hoc HTTP inside
+  rule expressions;
+- outbound requests are signed with the consuming Witness federation key and
+  response JWTs are verified before results enter local rule evaluation;
+- local claim rules can compose at least two verified peer evaluation results
+  into one signed local evaluation result;
+- peer denial, timeout, stale source, and unsupported-profile responses map to
+  deterministic local evaluation errors or denials according to config;
 - signed evaluation responses contain no raw source rows by default;
 - replayed requests are rejected;
-- audit records distinguish local versus federated evaluation;
+- audit records distinguish local evaluation, inbound federated evaluation,
+  outbound federated evaluation, and composed evaluation;
 - integration tests cover allow, deny, replay, expired request, unknown peer,
-  batch allow, batch limit denial, and subject-hash pairwise scoping.
+  batch allow, batch limit denial, subject-hash pairwise scoping, outbound
+  response verification failure, and composed-evaluation failure mapping.
 
-### Stage 5: Federated Credential Issuance
+### Stage 5: User-Presented Proof As Evidence
 
-Registry Witness can issue credentials for an allowed peer and can verify remote
-credentials as evidence in local workflows.
+Registry Witness can verify holder-presented credentials, SD-JWT disclosures, or
+verifiable presentations as explicit evidence inputs in local workflows.
+
+Definition of Done:
+
+- proof profiles are explicit and ordinary claim evaluation rejects remote
+  credentials unless a profile opts in;
+- presentation `aud`, nonce, expiry, holder binding, issuer trust, status
+  policy, and replay checks are enforced before rule evaluation;
+- actor-not-subject presentations are rejected unless an explicit
+  representation profile validates actor, subject, subject kind, authority,
+  scope, expiry, status, and purpose;
+- verified proof claims map into typed local rule inputs without exposing raw
+  credential payloads to CEL expressions;
+- audit records include issuer, profile, presentation id or nonce hash, status
+  result, and redacted actor, subject, and representation hashes when
+  representation is used;
+- tests cover wrong audience, replayed presentation, expired proof, missing
+  disclosure, untrusted issuer, stale or rejected status, missing
+  representation authority, wrong represented subject, wrong subject kind,
+  expired or revoked representation, collective-subject member-scope denial,
+  and successful proof mapping.
+
+### Stage 6: Federated Credential Issuance
+
+Registry Witness can help a holder obtain a credential from an allowed issuing
+Witness without breaking holder-binding or nonce ownership.
 
 Definition of Done:
 
@@ -1287,13 +1486,12 @@ Definition of Done:
 - issued credentials use the remote issuer identity;
 - consuming Witness does not proxy or rewrite holder proof material except as a
   transparent byte relay;
-- consuming Witness validates issuer, profile, trust, status policy, and
-  signature before accepting a remote credential;
 - audit records bind issuance to peer id, request id, profile, and redacted
   subject hash;
-- tests cover profile mismatch, untrusted issuer, expired credential, and replay.
+- tests cover profile mismatch, untrusted issuer, wrong holder proof audience,
+  nonce replay, substituted holder key, expired credential, and relay redaction.
 
-### Stage 6: Audit Checkpoints
+### Stage 7: Audit Checkpoints
 
 Registry Witness publishes signed audit checkpoints and can monitor configured
 peer checkpoints.
@@ -1371,10 +1569,9 @@ federation fields are absent.
    define a smaller Registry Witness JWT profile first?
 3. Do we need a public status endpoint for temporary suspension of a profile, or
    is signed metadata expiry enough for V1?
-4. Stage 5 deferred: should remote credentials be accepted as source evidence by
-   ordinary claim evaluation, or only by explicit federation-aware claim
-   profiles?
-5. Stage 6 deferred: V1 has pull-latest plus optional push observation. Do we
+4. Stage 5 decision: remote credentials are accepted as evidence only by
+   explicit user-presented proof profiles, not by ordinary claim evaluation.
+5. Stage 7 deferred: V1 has pull-latest plus optional push observation. Do we
    need paginated historical checkpoint exchange?
 6. Should the pairwise subject-ref HMAC include a deployment-specific salt
    version so issuers can rotate the subject-ref key while preserving a bounded
@@ -1391,6 +1588,214 @@ The first implementation should be deliberately small:
 4. Registry Witness returns a signed evaluation response with predicate/value
    disclosure only, no raw source rows.
 
-Signed public federation documents, audit checkpoints, trust bundles, batching,
-and federated credential issuance should come after the delegated evaluation
-path is working and covered by conformance tests.
+Signed public federation documents, outbound composition, user-presented proof,
+audit checkpoints, trust bundles, batching, and federated credential issuance
+should come after the delegated evaluation path is working and covered by
+conformance tests. User-presented proof should land before federated credential
+issuance because it verifies credentials the holder already has, without adding
+issuer nonce ownership or transparent-relay holder-proof semantics.
+
+## Definition Of Done For This Work
+
+This federation work is done only when all applicable criteria below are true
+and verified in CI or by named local commands:
+
+- Registry Manifest validates and renders `federation`, `evaluation_profiles`,
+  and `registry-witness` evidence offerings with unresolved `ruleset` fixtures
+  rejected by tests.
+- Registry Witness starts with federation disabled and does not mount
+  `/federation/v1/evaluations`.
+- Registry Witness starts with federation enabled only when `node_id`,
+  `issuer`, signing key, pairwise subject hash secret, replay config, peer
+  policy, and evaluation profiles validate.
+- `POST /federation/v1/evaluations` accepts only compact JWS requests with the
+  expected `typ`, allowed `alg`, configured peer `iss` and `sub`, correct `aud`,
+  valid `iat`, `nbf`, `exp`, ULID `jti`, allowed purpose, allowed profile, and
+  non-replayed `jti`.
+- Allowed delegated evaluation returns a compact JWS response with the expected
+  `typ`, serving Witness `iss` and `sub`, requesting peer `aud`, `request_jti`,
+  no raw source rows, and a pairwise `subject_ref.hash`.
+- Denied delegated evaluation returns the specified RFC 7807 problem envelope
+  and never performs a source read before peer policy succeeds.
+- Audit records are emitted for allowed, denied, replayed, stale-source, and
+  audit-write-failure paths, with peer id and subject redacted or hashed.
+- Registry Lab has a runnable federation demo or smoke path that signs a request
+  to a peer Witness, verifies the signed response, writes artifacts under
+  `output/`, and proves at least one denial or replay case.
+- Documentation and Registry Legend identify delegated evaluation as the MVP,
+  outbound composition and user-presented proof as planned follow-on work, and
+  federated credential issuance as later work with holder-binding constraints.
+- Verification commands pass: focused Manifest tests, focused Witness federation
+  tests, Registry Lab federation smoke, Registry Legend generation/checks when
+  docs or catalog surfaces change, and `git diff --check` in each touched repo.
+
+## Wave Implementation Plan
+
+- [ ] Wave 0: Review checkpoint and fixtures.
+  - Worker A: align this spec, MVP spec, operator guide, README, and Registry
+    Legend wording so the same scope appears everywhere.
+  - Worker B: add or update deterministic federation fixtures for Manifest,
+    Witness config, request JWT, response JWT, denial, and replay cases.
+  - Done when fixture files are committed, docs name the same stage boundaries,
+    `git diff --check` passes, and code review confirms no fixture contains
+    private keys, bearer tokens, or raw subject identifiers outside test-only
+    material.
+
+- [ ] Wave 1: Manifest metadata.
+  - Worker A: implement or tighten Manifest structs, validation, and catalog
+    rendering for `federation` and `evaluation_profiles`.
+  - Worker B: update CLI/rendering tests and docs examples.
+  - Done when valid fixtures render federation metadata, invalid `ruleset`,
+    invalid HTTPS URL, invalid protocol, duplicate profile id, and invalid
+    `did:web` binding tests fail closed, and reviewer signs off before Witness
+    runtime work starts.
+
+- [ ] Wave 2: Inbound delegated evaluation MVP.
+  - Worker A: implement config validation, route mounting, request verification,
+    peer policy, replay, and denial shaping.
+  - Worker B: implement response signing, pairwise subject hash, stale-source
+    handling, and audit emission.
+  - Done when focused Witness tests cover disabled route, allowed request,
+    unknown peer, bad `typ`, bad `alg`, bad `aud`, expired request, replay,
+    unsupported purpose, unsupported profile, stale source, and audit failure.
+    Code review must confirm source reads happen only after peer policy passes.
+
+- [ ] Wave 3: Registry Lab federation proof.
+  - Worker A: configure demo Witness peers, federation signing keys, pairwise
+    hash secrets, and evaluation profiles.
+  - Worker B: add `scripts/demo-federated-flow.py`, `scripts/smoke-federation.sh`,
+    and a `just federated` recipe.
+  - Done when the smoke signs a request, receives and verifies a signed response,
+    verifies denial or replay behavior, writes artifacts under `output/`, and
+    `scripts/release-check.sh` or a documented narrower release-equivalent check
+    passes.
+
+- [ ] Wave 4: Outbound composition.
+  - Worker A: design and implement a `registry_witness_federation` source
+    connector or equivalent runtime abstraction.
+  - Worker B: implement response verification, failure mapping, audit events,
+    and composed-rule tests.
+  - Done when one local claim composes at least two verified peer evaluations,
+    bad peer signatures never enter rule evaluation, denial and timeout mapping
+    are deterministic, and code review confirms no ad hoc HTTP calls are embedded
+    inside rule expressions.
+
+- [ ] Wave 5: User-presented proof.
+  - Worker A: implement explicit proof profiles, SD-JWT or VP verification,
+    holder binding, `aud`, nonce, expiry, replay, issuer trust, and status
+    policy checks.
+  - Worker B: map verified proof claims into typed rule inputs and audit
+    redacted proof metadata.
+  - Done when tests cover wrong audience, replay, expired proof, missing
+    disclosure, untrusted issuer, stale or rejected status, and successful proof
+    mapping. Code review must confirm ordinary claim evaluation rejects remote
+    credentials unless an explicit proof profile opts in.
+
+- [ ] Wave 6: Federated credential issuance.
+  - Worker A: define and implement discovery/handoff and transparent-byte-relay
+    ceremonies with issuer-owned `c_nonce`.
+  - Worker B: test holder proof audience, nonce replay, substituted holder key,
+    issuer identity, credential profile constraints, and relay redaction.
+  - Done when holder proof verification remains end-to-end with the issuing
+    Witness, the consuming Witness cannot mint nonce or rewrite proof material,
+    and verifier trust documentation covers remote issuer identities.
+
+- [ ] Wave 7: Audit checkpoints and trust hardening.
+  - Worker A: implement signed Merkle checkpoints and peer checkpoint monitoring.
+  - Worker B: implement trust-bundle validation, key-rotation overlap tests,
+    cache freshness, unknown-`kid` negative caching, and emergency denylist
+    scenarios.
+  - Done when checkpoint regression, sequence regression, root discontinuity,
+    compromised `kid` denial, metadata expiry, and JWKS refresh tests pass.
+
+Between waves, no feature is marked complete until a reviewer has checked the
+diff against this spec, the wave's tests and smoke commands are named in the
+review note, and any skipped check has an explicit blocker and owner.
+
+## Default Registry Lab Federation Demo Definition Of Done
+
+The default non-agricultural Registry Lab federation demo is done only when all
+criteria below are true and verified by named commands:
+
+- `civil-witness` serves federated profiles for `civil_age_band_value` and
+  `civil_alive_predicate`.
+- `social-protection-witness` serves federated profiles for
+  `beneficiary_active_predicate` and `household_eligibility_band_value`.
+- `age-band` is computed from Civil `birth_date` and returns only one of the
+  documented values: `child`, `youth`, `adult`, or `elderly`.
+- The demo benefits peer signs compact JWS requests with
+  `typ = registry-witness-request+jwt` and verifies compact JWS responses with
+  `typ = registry-witness-response+jwt`.
+- The demo writes artifacts under `registry-lab/output/federation/` for each
+  request payload, verified response payload, replay denial,
+  unsupported-purpose denial, and composed support decision.
+- The composed decision uses only verified federated response payloads. It must
+  not read Relay rows or embed raw source records.
+- The smoke proves replay denial with HTTP `409` and unsupported-purpose denial
+  with HTTP `403`.
+- Existing default commands still pass: `just smoke` and `just client`.
+- Existing agricultural federation remains green: `just agri-federation`.
+- `git diff --check` passes in every touched repository.
+
+`is_woman` is not part of this DoD until an explicit `sex` or `gender` fixture
+field exists. It must not be inferred from names.
+
+## Default Registry Lab Federation Demo Implementation Plan
+
+- [ ] Wave D0: Claim and fixture review.
+  - Worker A: inspect Civil and Social source fields and confirm the exact
+    source for `age-band`, `person-is-alive`, `beneficiary-active`, and
+    `household-eligibility-band`.
+  - Worker B: review existing default smoke/client artifacts and identify where
+    the federation artifacts should be added without changing existing output
+    names.
+  - Done when the review note names the source field for each claim, the output
+    artifact names, and whether a separate health Witness is deferred.
+  - Code-review checkpoint: reviewer confirms no demographic predicate is
+    inferred from names or undocumented fixture semantics.
+
+- [ ] Wave D1: Civil and Social Witness profiles.
+  - Worker A: add `age-band` claim and Civil federation profiles in
+    `registry-lab/config/witness/civil-witness.yaml`.
+  - Worker B: add or expose Social federation profiles in
+    `registry-lab/config/witness/social-protection-witness.yaml`.
+  - Done when both Witness configs validate at startup, profile ids resolve to
+    existing claim ids, allowed purposes are HTTPS URIs, and focused local
+    evaluations return the expected values for at least `NID-1001` and one
+    non-child or inactive case.
+  - Code-review checkpoint: reviewer confirms profile ids, rulesets, claim ids,
+    subject id types, and source scopes match the local config.
+
+- [ ] Wave D2: Default federation demo client and smoke.
+  - Worker A: add `scripts/demo-federation.py` to sign requests, call Civil and
+    Social federation endpoints, verify response JWTs, and compose the support
+    decision.
+  - Worker B: add `scripts/smoke-federation.sh`, `just federation`, and readiness
+    checks for the peer JWKS and serving Witnesses.
+  - Done when `just federation` writes all required artifacts, verifies response
+    signatures, proves replay and unsupported-purpose denials, and rejects any
+    artifact containing configured raw secrets.
+  - Code-review checkpoint: reviewer confirms compact JWS verification happens
+    before composition and that artifacts contain no raw source rows.
+
+- [ ] Wave D3: Metadata and docs alignment.
+  - Worker A: update static metadata and evidence offerings so the default demo
+    advertises the Civil and Social federation profiles.
+  - Worker B: update `registry-lab/README.md` and any Registry Legend pages that
+    describe the default demo.
+  - Done when static metadata generation passes, the advertised `ruleset` values
+    resolve to evaluation profiles, docs name delegated evaluation as the demo
+    scope, and docs explicitly defer outbound Witness composition, user-presented
+    proof, and federated credential issuance.
+  - Code-review checkpoint: reviewer confirms generated metadata was produced
+    through the documented generator and no generated-only source was hand edited.
+
+- [ ] Wave D4: Regression and release check.
+  - Worker A: run the default checks: `just smoke`, `just client`, and
+    `just federation`.
+  - Worker B: run the cross-demo guard checks: `just agri-federation` and the
+    relevant script syntax or fixture-generation checks.
+  - Done when all commands pass from a clean generated local environment, or any
+    skipped command has a named external blocker and exact rerun command.
+  - Code-review checkpoint: no feature is marked done until the review note
+    lists command outputs, changed files, known pitfalls, and remaining risks.

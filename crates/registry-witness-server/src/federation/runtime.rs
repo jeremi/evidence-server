@@ -57,7 +57,15 @@ impl FederationRuntimeState {
             .into_bytes();
         let mut peers_by_issuer = HashMap::new();
         for peer in &config.peers {
-            let fetch_url_policy = if peer.allow_insecure_localhost {
+            let fetch_url_policy = if peer.allow_insecure_private_network {
+                FetchUrlPolicy {
+                    allowed_schemes: vec!["http".to_string(), "https".to_string()],
+                    allow_localhost: true,
+                    allow_http_private_network: true,
+                    deny_private_ranges: false,
+                    deny_cloud_metadata: true,
+                }
+            } else if peer.allow_insecure_localhost {
                 FetchUrlPolicy::dev()
             } else {
                 FetchUrlPolicy::strict()
