@@ -108,39 +108,46 @@ federation:
   enabled: true
   node_id: did:web:agency-a.example.gov
   issuer: https://agency-a.example.gov
+  jwks_uri: https://agency-a.example.gov/federation/jwks.json
+  federation_api: https://agency-a.example.gov/federation/v1
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
   inbound_body_limit_bytes: 16384
+  max_request_lifetime_seconds: 300
+  clock_leeway_seconds: 60
   signing:
-    response_signing_key_id: witness-fed-2026-05
-    response_signing_key_env: REGISTRY_WITNESS_FEDERATION_RESPONSE_JWK
-    response_signing_alg: EdDSA
-    pairwise_subject_hash_secret_env: REGISTRY_WITNESS_PAIRWISE_SUBJECT_HASH_SECRET
-  peer_policy:
-    default: deny
-    peers:
-      - node_id: did:web:agency-b.example.gov
-        issuer: https://agency-b.example.gov
-        jwks_uri: https://agency-b.example.gov/.well-known/jwks.json
-        allowed_protocol_versions:
-          - registry-witness-federation/v0.1
-        allowed_actions:
-          - evaluate
-        allowed_profiles:
-          - disability_status_predicate
-        allowed_purposes:
-          - https://purpose.example.gov/social-protection/service-delivery
-        max_batch_size: 1
-        max_source_observed_age_seconds: 3600
+    kid: witness-fed-2026-05
+    key_env: REGISTRY_WITNESS_FEDERATION_RESPONSE_JWK
+    alg: EdDSA
+  pairwise_subject_hash:
+    secret_env: REGISTRY_WITNESS_PAIRWISE_SUBJECT_HASH_SECRET
+  peers:
+    - node_id: did:web:agency-b.example.gov
+      issuer: https://agency-b.example.gov
+      jwks_uri: https://agency-b.example.gov/.well-known/jwks.json
+      allowed_protocol_versions:
+        - registry-witness-federation/v0.1
+      allowed_purposes:
+        - https://purpose.example.gov/social-protection/service-delivery
+      allowed_profiles:
+        - disability_status_predicate
+      source_scopes:
+        - disability_registry:evidence_verification
+  evaluation_profiles:
+    - id: disability_status_predicate
+      ruleset: disability-status-v1
+      claim_id: disability_status
+      subject_id_type: national_id
+      max_source_observed_age_seconds: 3600
   replay:
     storage: in_process_single_instance_only
-    max_request_lifetime_seconds: 300
-    clock_leeway_seconds: 60
     max_entries: 10000
     eviction: expire_oldest
   response_shaping:
     minimum_denial_latency_ms: 250
   emergency_denylist:
     node_ids: []
-    key_ids: []
+    kids: []
 ```
 
 The local peer policy is authoritative. If Manifest says a profile exists but
@@ -529,6 +536,26 @@ until every applicable item below is satisfied and reviewed.
 - The repository commands listed in the project README for formatting, linting,
   and focused tests pass, or any skipped command is documented with the exact
   blocker.
+
+## Spec-To-Code Checklist
+
+This is the current MVP trace from this spec to implementation. Keep it updated
+when behavior changes.
+
+| Spec requirement | Implementation | Verification |
+|---|---|---|
+| Manifest declares `federation` and `evaluation_profiles` | `registry-manifest-core/src/lib.rs` federation structs and validation | `federated_evaluation_manifest_validates_and_renders_catalog_fields` |
+| `access.ruleset` resolves to an evaluation profile ruleset | `validate_registry_witness_access` checks `evaluation_profiles[*].ruleset` | `validation_rejects_registry_witness_unresolved_ruleset` |
+| Federation disabled by default and route hidden | `standalone_router` mounts federation router only when enabled | `federation_route_is_not_mounted_until_enabled` |
+| Startup validates node/issuer binding and peer policy | `FederationConfig::validate` | `federation_config_validates_enabled_mvp_shape` and negative config tests |
+| Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `registry-witness-server/src/federation.rs` request handler and `TokenVerifier` integration | `federation_denial_happens_before_source_read` |
+| Denials before policy pass do not read sources | `handle_federated_evaluate` orders verification before `evaluate_with_source_capability` | source hit counters in denial tests |
+| Oversized request bodies are rejected before full buffering | `to_bytes(body, inbound_body_limit_bytes)` in federation handler | oversized body case in `federation_denial_happens_before_source_read` |
+| Single-instance replay retains `jti` through `exp + leeway` and evicts oldest entries | `FederationReplayStore` | federation replay-store unit tests |
+| Successful response is signed and bound to `request_jti` | `FederationSignedOutcome::success` | `federation_evaluation_returns_signed_response_and_rejects_replay` |
+| Stale source returns signed top-level `error` | `FederationSignedOutcome::evaluation_error` | `federation_stale_source_observation_returns_signed_evaluation_error` |
+| Audit is write-before-respond | federation audit emission before response return | `federation_audit_write_failure_replaces_signed_success` |
+| Two configured standalone Witnesses can complete delegated evaluation | two `standalone_router` instances in one smoke test | `federation_two_standalone_witnesses_smoke` |
 
 ## Wave Implementation Plan
 

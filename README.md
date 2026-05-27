@@ -36,6 +36,9 @@ but Registry Witness does not import or link Registry Relay code.
 - [`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md):
   first practical federation slice for static-peer, signed delegated
   evaluation.
+- [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md):
+  minimal static-peer setup, env vars, replay limitation, and verification
+  checklist for the MVP.
 
 ## Credential Conformance
 

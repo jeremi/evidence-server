@@ -452,6 +452,13 @@ pub const FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY: &str =
     "in_process_single_instance_only";
 pub const FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST: &str = "expire_oldest";
 
+/// Replay protection settings for the federation MVP.
+///
+/// `in_process_single_instance_only` is deliberately named as an operator
+/// warning. It is not safe for active-active serving Witness deployments
+/// because a replay accepted by one process is invisible to another process.
+/// Production multi-instance federation needs a shared replay store before
+/// privileged federation routes are enabled.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FederationReplayConfig {

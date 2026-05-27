@@ -302,14 +302,35 @@ fn federation_config(
     audit_path: &str,
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    federation_config_for(
+        base_url,
+        audit_path,
+        "did:web:agency-a.example.gov",
+        "https://agency-a.example.gov",
+        "did:web:agency-b.example.gov",
+        "https://agency-b.example.gov",
+        peer_jwks_uri,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn federation_config_for(
+    base_url: &str,
+    audit_path: &str,
+    node_id: &str,
+    issuer: &str,
+    peer_node_id: &str,
+    peer_issuer: &str,
+    peer_jwks_uri: &str,
+) -> StandaloneRegistryWitnessConfig {
     let mut config = registry_data_api_config(base_url, audit_path);
     config.federation = serde_norway::from_str(&format!(
         r#"
 enabled: true
-node_id: did:web:agency-a.example.gov
-issuer: https://agency-a.example.gov
-jwks_uri: https://agency-a.example.gov/federation/jwks.json
-federation_api: https://agency-a.example.gov/federation/v1
+node_id: {node_id}
+issuer: {issuer}
+jwks_uri: {issuer}/federation/jwks.json
+federation_api: {issuer}/federation/v1
 supported_protocol_versions:
   - registry-witness-federation/v0.1
 signing:
@@ -325,8 +346,8 @@ replay:
 response_shaping:
   minimum_denial_latency_ms: 1
 peers:
-  - node_id: did:web:agency-b.example.gov
-    issuer: https://agency-b.example.gov
+  - node_id: {peer_node_id}
+    issuer: {peer_issuer}
     jwks_uri: "{peer_jwks_uri}"
     allow_insecure_localhost: true
     allowed_protocol_versions:
@@ -869,6 +890,81 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         .any(|record| record["decision"] == json!("federated_evaluate_denied")));
     assert!(!audit.contains("person-1"));
     assert!(!audit.contains("source-token"));
+}
+
+#[tokio::test]
+async fn federation_two_standalone_witnesses_smoke() {
+    set_federation_env();
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let agency_b_jwks = MockHttpUpstream::start().await;
+    let (agency_b_private, _) = fixtures::ed25519_pair();
+    agency_b_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&agency_b_private))
+        .await;
+    let agency_a_jwks = MockHttpUpstream::start().await;
+    let (agency_a_private, _) = fixtures::ed25519_pair();
+    agency_a_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&agency_a_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let agency_a_audit = tmp.path().join("agency-a-audit.jsonl");
+    let agency_b_audit = tmp.path().join("agency-b-audit.jsonl");
+    let agency_a = TestServer::builder().http_transport().build(
+        standalone_router(federation_config_for(
+            base_url.trim_end_matches('/'),
+            agency_a_audit.to_str().expect("audit path is UTF-8"),
+            "did:web:agency-a.example.gov",
+            "https://agency-a.example.gov",
+            "did:web:agency-b.example.gov",
+            "https://agency-b.example.gov",
+            &format!("{}/jwks", agency_b_jwks.url()),
+        ))
+        .expect("agency A standalone router builds"),
+    );
+    let agency_b = TestServer::builder().http_transport().build(
+        standalone_router(federation_config_for(
+            base_url.trim_end_matches('/'),
+            agency_b_audit.to_str().expect("audit path is UTF-8"),
+            "did:web:agency-b.example.gov",
+            "https://agency-b.example.gov",
+            "did:web:agency-a.example.gov",
+            "https://agency-a.example.gov",
+            &format!("{}/jwks", agency_a_jwks.url()),
+        ))
+        .expect("agency B standalone router builds"),
+    );
+    agency_b.get("/healthz").await.assert_status_ok();
+
+    let token = federation_request_jwt(
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6S0",
+        "https://purpose.example.test/eligibility",
+    );
+    let response = agency_a
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(token))
+        .await;
+
+    response.assert_status_ok();
+    let claims = verified_federation_response_claims(&response.text());
+    assert_eq!(claims["iss"], json!("https://agency-a.example.gov"));
+    assert_eq!(claims["aud"], json!("did:web:agency-b.example.gov"));
+    assert_eq!(
+        claims["result"]["claims"]["farmer-under-4ha"]["satisfied"],
+        json!(true)
+    );
+    let records = audit_records(&agency_a_audit);
+    assert!(records
+        .iter()
+        .any(|record| record["decision"] == json!("federated_evaluate")));
 }
 
 #[tokio::test]
