@@ -55,12 +55,15 @@ fn split_demo_config_loads_validates_and_builds_router() {
 
 #[test]
 fn openspp_disability_demo_config_loads_validates_and_builds_router() {
+    let _guard = common::issuer_jwk_guard();
+
     unsafe {
         std::env::set_var(
             "REGISTRY_WITNESS_API_KEY_HASH",
             "sha256:b41153a98b372cb2ec4735b53df68a344dabe5a6664f7f49264fb30f385959ea",
         );
         std::env::set_var("OPENSPP_DCI_TOKEN", "test-openspp-dci-token");
+        std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", DEMO_ISSUER_JWK);
         std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
