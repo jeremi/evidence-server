@@ -12,7 +12,7 @@ use crate::config::CredentialProfileConfig;
 use crate::error::EvidenceError;
 use crate::model::{ClaimResultView, SD_JWT_VC_SIGNING_ALG};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SignedSdJwtVc {
     pub credential_id: String,
     pub issuer: String,
@@ -20,6 +20,19 @@ pub struct SignedSdJwtVc {
     pub compact: String,
     pub issuer_signed_jwt: String,
     pub disclosures: Vec<String>,
+}
+
+impl fmt::Debug for SignedSdJwtVc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignedSdJwtVc")
+            .field("credential_id", &self.credential_id)
+            .field("issuer", &self.issuer)
+            .field("expires_at", &self.expires_at)
+            .field("compact", &"[redacted]")
+            .field("issuer_signed_jwt", &"[redacted]")
+            .field("disclosures", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -459,6 +472,32 @@ mod tests {
         assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
         assert!(!debug.contains("1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"));
         assert!(!debug.contains("encoding_key"));
+    }
+
+    #[test]
+    fn signed_sd_jwt_vc_debug_redacts_compact_material() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("person-is-alive")],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let debug = format!("{signed:?}");
+
+        assert!(debug.contains("SignedSdJwtVc"));
+        assert!(debug.contains(&signed.credential_id));
+        assert!(debug.contains(&signed.issuer));
+        assert!(debug.contains(&signed.expires_at));
+        assert!(!debug.contains(&signed.compact));
+        assert!(!debug.contains(&signed.issuer_signed_jwt));
+        for disclosure in &signed.disclosures {
+            assert!(!debug.contains(disclosure));
+        }
     }
 
     #[test]
