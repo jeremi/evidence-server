@@ -2217,18 +2217,17 @@ fn dci_search_request_body(
 
 fn add_dci_envelope_options(dci: &DciSourceConnectionConfig, body: &mut Value) {
     if let Some(receiver_id) = &dci.receiver_id {
-        body.pointer_mut("/header")
-            .and_then(Value::as_object_mut)
-            .expect("DCI header is an object")
-            .insert(
+        if let Some(header) = body.pointer_mut("/header").and_then(Value::as_object_mut) {
+            header.insert(
                 "receiver_id".to_string(),
                 Value::String(receiver_id.clone()),
             );
+        }
     }
     if let Some(signature) = &dci.signature {
-        body.as_object_mut()
-            .expect("DCI request body is an object")
-            .insert("signature".to_string(), Value::String(signature.clone()));
+        if let Some(object) = body.as_object_mut() {
+            object.insert("signature".to_string(), Value::String(signature.clone()));
+        }
     }
 }
 

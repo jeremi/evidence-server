@@ -443,23 +443,15 @@ fn validate_source_workflow(
         )));
     }
     let mut visited = BTreeSet::new();
+    let mut path = BTreeSet::new();
     for start_step in &workflow.steps {
-        if visited.contains(start_step.id.as_str()) {
-            continue;
-        }
-        let mut path = BTreeSet::new();
-        let current = start_step.id.as_str();
-        if !path.insert(current) {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow contains a cycle at step {current}"
-            )));
-        }
-        if let Some(next_steps) = next_by_step.get(current) {
-            for next in next_steps {
-                detect_workflow_cycle(source_id, &next_by_step, next, &mut path, &visited)?;
-            }
-        }
-        visited.extend(path);
+        detect_workflow_cycle(
+            source_id,
+            &next_by_step,
+            start_step.id.as_str(),
+            &mut path,
+            &mut visited,
+        )?;
     }
 
     Ok(())
@@ -470,21 +462,23 @@ fn detect_workflow_cycle<'a>(
     next_by_step: &BTreeMap<&'a str, Vec<&'a str>>,
     current: &'a str,
     path: &mut BTreeSet<&'a str>,
-    visited: &BTreeSet<&'a str>,
+    visited: &mut BTreeSet<&'a str>,
 ) -> Result<(), SidecarError> {
-    if visited.contains(current) {
-        return Ok(());
-    }
-    if !path.insert(current) {
+    if path.contains(current) {
         return Err(SidecarError::Config(format!(
             "source {source_id} workflow contains a cycle at step {current}"
         )));
     }
+    if !visited.insert(current) {
+        return Ok(());
+    }
+    path.insert(current);
     if let Some(next_steps) = next_by_step.get(current) {
         for next in next_steps {
             detect_workflow_cycle(source_id, next_by_step, next, path, visited)?;
         }
     }
+    path.remove(current);
     Ok(())
 }
 
