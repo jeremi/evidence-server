@@ -743,14 +743,22 @@ from dual package names.
 ## JWKS And Discovery Cache
 
 `/.well-known/evidence/jwks.json` is load-bearing for clients that verify
-Notary-signed artifacts. The client should provide a small JWKS cache:
+Notary-signed artifacts. The server returns `Cache-Control: public,
+max-age=600`, and the client should provide a small JWKS cache:
 
 - default TTL: 10 minutes;
 - configurable TTL range: 5 to 15 minutes for normal deployments;
-- forced refresh on `kid` mismatch;
+- forced refresh on `kid` mismatch before treating the artifact as
+  unverifiable;
 - explicit `refresh_jwks()` method;
 - no stale-key fallback after a failed forced refresh unless the caller opts
   into a documented offline verification mode.
+
+Operators must keep replaced issuer keys published for at least the maximum
+credential lifetime plus accepted clock skew and longer than the advertised
+JWKS cache TTL. Clients should not assume a new key is visible until one cache
+TTL has elapsed, but they must bypass the cached set once when an otherwise
+valid artifact references an unknown `kid`.
 
 The client may fetch `/openapi.json` for compatibility diagnostics in debug or
 test tooling. It should not require OpenAPI fetches on normal startup.

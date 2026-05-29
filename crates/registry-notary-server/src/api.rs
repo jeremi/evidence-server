@@ -55,6 +55,7 @@ const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const ADMIN_SCOPE: &str = "registry_notary:admin";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
+const JWKS_CACHE_CONTROL: &str = "public, max-age=600";
 
 pub use crate::federation::federation_router;
 
@@ -1069,7 +1070,14 @@ async fn issuer_jwks(
         Err(error) => return evidence_error_response(error),
     };
     match state.issuers.public_jwks(evidence) {
-        Ok(keys) => Json(json!({ "keys": keys })).into_response(),
+        Ok(keys) => {
+            let mut response = Json(json!({ "keys": keys })).into_response();
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static(JWKS_CACHE_CONTROL),
+            );
+            response
+        }
         Err(error) => evidence_error_response(error),
     }
 }
