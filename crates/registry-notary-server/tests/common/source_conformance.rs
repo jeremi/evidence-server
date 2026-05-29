@@ -240,6 +240,26 @@ async fn rda_fixture(
             })),
         )
             .into_response(),
+        Some("upstream-bad-request") => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "fixture rejected lookup",
+                "lookup_value": "upstream-bad-request",
+                "private_row": "fixture-private-field",
+            })),
+        )
+            .into_response(),
+        Some("upstream-timeout") => {
+            tokio::time::sleep(std::time::Duration::from_secs(11)).await;
+            Json(json!({
+                "data": [{
+                    "id": "upstream-timeout",
+                    "total_farmed_area": 99.0,
+                    "fixture_private_field": "must-not-disclose",
+                }]
+            }))
+            .into_response()
+        }
         _ => Json(json!({ "data": [] })).into_response(),
     }
 }
