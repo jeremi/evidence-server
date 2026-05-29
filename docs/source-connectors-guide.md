@@ -108,6 +108,57 @@ Source errors should preserve the Notary security boundary:
 
 Disable `retry_on_5xx` when a synchronous source execution must not be repeated.
 
+## Connector Conformance Tests
+
+Source connectors should pass the shared conformance scenarios before they are
+used by a claim profile. The current contract covers:
+
+- exact-match lookup with bounded projection;
+- not-found lookup;
+- ambiguous lookup with more than one source row;
+- caller auth denied before any source read;
+- source auth denied by the upstream;
+- purpose denied by the upstream;
+- missing purpose denied before any source read;
+- upstream error without raw upstream disclosure;
+- response, audit, and metrics non-disclosure for source tokens, subject ids,
+  raw source rows, and private fixture fields.
+
+The built-in Registry Data API connector contract lives in
+`crates/registry-notary-server/tests/source_connector_conformance.rs` and uses
+the reusable harness in
+`crates/registry-notary-server/tests/common/source_conformance.rs`. Run it
+locally with:
+
+```bash
+cargo test -p registry-notary-server --test source_connector_conformance
+```
+
+Run the same command in CI for changes that add or modify a Notary source
+connector. If the connector performs synchronous upstream work that must not be
+replayed, configure the test source connection with `retry_on_5xx: false` and
+assert the fixture saw one upstream call for error cases.
+
+New in-process connector tests should reuse `rda_connector_harness` as the
+shape to copy: start a deterministic upstream, build a Notary config pointed at
+that upstream, drive `/claims/evaluate`, and assert both the Notary result and
+the exact upstream request boundary. Keep fixture responses intentionally
+overspecified with private fields so each connector proves projection and
+non-disclosure.
+
+The OpenFn sidecar reference adapter exposes a Registry Data API-shaped HTTP
+surface and has its own external-adapter contract in
+`crates/registry-notary-openfn-sidecar/tests/rda_contract.rs`. Run it locally
+with:
+
+```bash
+cargo test -p registry-notary-openfn-sidecar --test rda_contract
+```
+
+Include both conformance commands in CI when a change affects the Notary
+`registry_data_api` connector, the OpenFn sidecar RDA facade, shared source auth,
+purpose forwarding, source error mapping, or source non-disclosure behavior.
+
 ## Diagnostics
 
 Run config-only diagnostics:
