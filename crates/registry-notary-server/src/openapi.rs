@@ -1335,9 +1335,17 @@ fn add_error_envelope_operation_extensions(document: &mut Value) {
 }
 
 fn set_error_envelope_extension(document: &mut Value, path: &str, method: &str, envelope: Value) {
-    let Some(operation) = document["paths"][path][method].as_object_mut() else {
-        return;
-    };
+    let paths = document
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .expect("OpenAPI document has paths object");
+    let path_item = paths
+        .get_mut(path)
+        .unwrap_or_else(|| panic!("OpenAPI document is missing path {path}"));
+    let operation = path_item
+        .get_mut(method)
+        .and_then(Value::as_object_mut)
+        .unwrap_or_else(|| panic!("OpenAPI document is missing operation {method} {path}"));
     operation.insert("x-registry-notary-error-envelope".to_string(), envelope);
 }
 
@@ -2562,6 +2570,25 @@ mod tests {
             doc["paths"]["/ready"]["get"]["x-registry-notary-error-envelope"]["family"],
             json!("readiness_status")
         );
+
+        let paths = doc["paths"].as_object().expect("paths is an object");
+        for (path, path_item) in paths {
+            let operations = path_item.as_object().expect("path item is an object");
+            for (method, operation) in operations {
+                if !matches!(
+                    method.as_str(),
+                    "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace"
+                ) {
+                    continue;
+                }
+                assert!(
+                    operation
+                        .get("x-registry-notary-error-envelope")
+                        .is_some_and(serde_json::Value::is_object),
+                    "missing error envelope extension on {method} {path}"
+                );
+            }
+        }
     }
 
     #[test]
