@@ -35,12 +35,12 @@ not import or link Registry Relay code.
 - [`docs/opencrvs-dci.md`](docs/opencrvs-dci.md):
   OpenCRVS DCI demo setup notes and current interop boundaries.
 - [`docs/opencrvs-dci-standalone-tutorial.md`](docs/opencrvs-dci-standalone-tutorial.md):
-  generated standalone quickstart for `init opencrvs-dci`, `doctor`,
-  `explain-config`, `--env-file`, OpenCRVS source OAuth, and demo SD-JWT VC
+  standalone quickstart for `init dci`, the explicit OpenCRVS DCI config edits,
+  `doctor`, `explain-config`, `--env-file`, source OAuth, and demo SD-JWT VC
   issuance.
 - [`docs/opencrvs-dci-setup-simplification-spec.md`](docs/opencrvs-dci-setup-simplification-spec.md):
   implementation-aligned setup simplification spec for the generic env-file,
-  source-auth, diagnostics, preset, initializer, API-key hash, and demo issuer
+  source-auth, diagnostics, initializer, API-key hash, and demo issuer
   workflows.
 - [`docs/federated-notary-manifest-spec.md`](docs/federated-notary-manifest-spec.md):
   Registry Manifest-backed federation, peer discovery, trust, delegated

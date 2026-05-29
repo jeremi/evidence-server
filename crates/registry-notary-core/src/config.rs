@@ -40,11 +40,6 @@ pub struct StandaloneRegistryNotaryConfig {
 }
 
 impl StandaloneRegistryNotaryConfig {
-    pub fn with_expanded_presets(mut self) -> Result<Self, EvidenceConfigError> {
-        self.evidence.expand_presets()?;
-        Ok(self)
-    }
-
     pub fn validate(&self) -> Result<(), EvidenceConfigError> {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
@@ -2443,15 +2438,6 @@ pub enum EvidenceConfigError {
     InvalidFederationConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
     InvalidSourceAuthConfig { connection: String, reason: String },
-    #[error(
-        "source_connection '{connection}': unknown preset '{preset}'; known presets: {known}",
-        known = known.join(", ")
-    )]
-    UnknownPreset {
-        connection: String,
-        preset: String,
-        known: Vec<String>,
-    },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
@@ -2566,15 +2552,6 @@ pub struct EvidenceConfig {
     pub concurrency: ConcurrencyConfig,
 }
 
-impl EvidenceConfig {
-    pub fn expand_presets(&mut self) -> Result<(), EvidenceConfigError> {
-        for (connection_id, connection) in &mut self.source_connections {
-            connection.expand_preset(connection_id)?;
-        }
-        Ok(())
-    }
-}
-
 fn default_service_id() -> String {
     "registry-notary".to_string()
 }
@@ -2667,8 +2644,6 @@ pub struct SourceBindingConfig {
 #[serde(deny_unknown_fields)]
 pub struct SourceConnectionConfig {
     pub base_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset: Option<String>,
     /// Development escape hatch for local demos and tests. Production source
     /// fetches stay on the strict outbound URL policy by default.
     #[serde(default)]
@@ -2731,31 +2706,8 @@ impl SourceConnectionConfig {
         Ok(())
     }
 
-    pub fn expand_preset(&mut self, connection_id: &str) -> Result<(), EvidenceConfigError> {
-        let Some(preset) = self.preset.as_deref() else {
-            return Ok(());
-        };
-        let dci = match preset {
-            "opencrvs_birth_dci" | "opencrvs_birth_dci@2026-05" => opencrvs_birth_dci(),
-            other => {
-                return Err(EvidenceConfigError::UnknownPreset {
-                    connection: connection_id.to_string(),
-                    preset: other.to_string(),
-                    known: vec![
-                        "opencrvs_birth_dci".to_string(),
-                        "opencrvs_birth_dci@2026-05".to_string(),
-                    ],
-                });
-            }
-        };
-        apply_opencrvs_birth_dci_defaults(&mut self.dci, dci);
-        Ok(())
-    }
-
     pub fn effective_dci(&self) -> Result<DciSourceConnectionConfig, EvidenceConfigError> {
-        let mut connection = self.clone();
-        connection.expand_preset("<inline>")?;
-        Ok(connection.dci)
+        Ok(self.dci.clone())
     }
 }
 
@@ -2942,65 +2894,6 @@ impl Default for DciSourceConnectionConfig {
             field_paths: BTreeMap::new(),
             signature: None,
         }
-    }
-}
-
-fn opencrvs_birth_dci() -> DciSourceConnectionConfig {
-    DciSourceConnectionConfig {
-        search_path: "/registry/sync/search".to_string(),
-        sender_id: "registry-notary".to_string(),
-        receiver_id: None,
-        query_type: "idtype-value".to_string(),
-        records_path: "/message/search_response/0/data/reg_records".to_string(),
-        bulk_records_path: "/data/reg_records".to_string(),
-        max_results: 2,
-        registry_type: Some("ns:org:RegistryType:Civil".to_string()),
-        registry_event_type: Some("birth".to_string()),
-        record_type: None,
-        field_paths: BTreeMap::new(),
-        signature: None,
-    }
-}
-
-fn apply_opencrvs_birth_dci_defaults(
-    target: &mut DciSourceConnectionConfig,
-    preset: DciSourceConnectionConfig,
-) {
-    if target.search_path == default_dci_search_path() {
-        target.search_path = preset.search_path;
-    }
-    if target.sender_id == default_dci_sender_id() {
-        target.sender_id = preset.sender_id;
-    }
-    if target.receiver_id.is_none() {
-        target.receiver_id = preset.receiver_id;
-    }
-    if target.query_type == default_dci_query_type() {
-        target.query_type = preset.query_type;
-    }
-    if target.records_path == default_dci_records_path() {
-        target.records_path = preset.records_path;
-    }
-    if target.bulk_records_path == default_dci_bulk_records_path() {
-        target.bulk_records_path = preset.bulk_records_path;
-    }
-    if target.max_results == default_dci_max_results() {
-        target.max_results = preset.max_results;
-    }
-    if target.registry_type.is_none() {
-        target.registry_type = preset.registry_type;
-    }
-    if target.registry_event_type.is_none() {
-        target.registry_event_type = preset.registry_event_type;
-    }
-    if target.record_type.is_none() {
-        target.record_type = preset.record_type;
-    }
-    if target.field_paths.is_empty() {
-        target.field_paths = preset.field_paths;
-    }
-    if target.signature.is_none() {
-        target.signature = preset.signature;
     }
 }
 
@@ -4281,7 +4174,6 @@ auth:
             "src".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "UPSTREAM_TOKEN".to_string(),
@@ -4358,7 +4250,6 @@ source_auth:
             "src".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
@@ -4396,7 +4287,6 @@ source_auth:
             "src".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: String::new(),
@@ -4427,56 +4317,6 @@ source_auth:
             }
             other => panic!("unexpected error variant: {other}"),
         }
-    }
-
-    #[test]
-    fn opencrvs_birth_preset_expands_dci_defaults() {
-        let yaml = r#"
-base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
-preset: opencrvs_birth_dci
-token_env: SRC_TOKEN
-"#;
-        let mut connection: SourceConnectionConfig =
-            serde_norway::from_str(yaml).expect("connection YAML parses");
-        connection
-            .expand_preset("opencrvs")
-            .expect("known preset expands");
-        assert_eq!(connection.dci.search_path, "/registry/sync/search");
-        assert_eq!(
-            connection.dci.registry_type.as_deref(),
-            Some("ns:org:RegistryType:Civil")
-        );
-        assert_eq!(connection.dci.registry_event_type.as_deref(), Some("birth"));
-        assert_eq!(
-            connection.dci.records_path,
-            "/message/search_response/0/data/reg_records"
-        );
-    }
-
-    #[test]
-    fn unknown_source_preset_is_rejected() {
-        let mut config = minimal_config();
-        config.evidence.source_connections.insert(
-            "src".to_string(),
-            SourceConnectionConfig {
-                base_url: "https://upstream.example".to_string(),
-                preset: Some("missing_preset".to_string()),
-                allow_insecure_localhost: false,
-                allow_insecure_private_network: false,
-                token_env: "SRC_TOKEN".to_string(),
-                source_auth: None,
-                dci: DciSourceConnectionConfig::default(),
-                max_in_flight: 8,
-                retry_on_5xx: true,
-                bulk_mode: BulkMode::None,
-                bulk_mode_lookup_unique: false,
-                bulk_timeout_max_ms: 30_000,
-            },
-        );
-        let err = config
-            .validate()
-            .expect_err("unknown preset must fail validation");
-        assert!(matches!(err, EvidenceConfigError::UnknownPreset { .. }));
     }
 
     // -----------------------------------------------------------------------
@@ -4555,7 +4395,6 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
@@ -4592,7 +4431,6 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
@@ -4635,7 +4473,6 @@ bulk_mode: unsupported_mode
             "registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
@@ -4678,7 +4515,6 @@ bulk_mode: unsupported_mode
             "registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
@@ -4706,7 +4542,6 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
-                preset: None,
                 allow_insecure_localhost: false,
                 allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),

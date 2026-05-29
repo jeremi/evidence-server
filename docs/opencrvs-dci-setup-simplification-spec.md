@@ -1,6 +1,14 @@
 # OpenCRVS DCI Setup Simplification Spec
 
-Status: Implementation-aligned documentation update
+Status: Superseded by the generic `init dci` approach
+
+Decision update: Registry Notary no longer carries an OpenCRVS-specific
+initializer or built-in OpenCRVS DCI preset. The implemented direction is a
+generic `registry-notary init dci` starter plus explicit DCI config fields.
+OpenCRVS-specific values live in tutorial/config text, not code. Sections below
+that discuss `init opencrvs-dci`, `opencrvs_birth_dci`, or preset expansion are
+historical context from the earlier design and should not be used as current
+implementation guidance.
 
 Owner: Registry Notary
 

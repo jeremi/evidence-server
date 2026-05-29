@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Registry Notary config for testing the OpenCRVS DCI CRVS API.
-# Fetch an OpenCRVS OAuth client-credentials token before startup and provide
-# it through OPENCRVS_DCI_TOKEN. Client credentials and live access tokens must
-# stay out of this file.
+# Provide OpenCRVS OAuth client credentials through env vars. Client secrets
+# and live access tokens must stay out of this file.
 
 server:
   bind: 127.0.0.1:4255
@@ -27,7 +26,12 @@ evidence:
   source_connections:
     opencrvs_crvs:
       base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
-      token_env: OPENCRVS_DCI_TOKEN
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
+        client_id_env: DCI_CLIENT_ID
+        client_secret_env: DCI_CLIENT_SECRET
+        request_format: json
       bulk_mode: none
       dci:
         search_path: /registry/sync/search

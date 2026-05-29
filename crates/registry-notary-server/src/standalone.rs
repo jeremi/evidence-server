@@ -81,7 +81,6 @@ where
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
-    let config = config.with_expanded_presets()?;
     config.validate()?;
     let evidence = Arc::new(config.evidence.clone());
     let self_attestation = Arc::new(config.self_attestation.clone());
@@ -2929,7 +2928,6 @@ mod tests {
                 "registry".to_string(),
                 SourceConnectionConfig {
                     base_url: base_url.to_string(),
-                    preset: None,
                     allow_insecure_localhost,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
@@ -3833,7 +3831,6 @@ sources:
                         .server_address()
                         .expect("HTTP transport exposes upstream address")
                         .to_string(),
-                    preset: None,
                     allow_insecure_localhost: true,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
@@ -3938,7 +3935,6 @@ sources:
                 "registry".to_string(),
                 registry_notary_core::SourceConnectionConfig {
                     base_url: "https://registry.example.test".to_string(),
-                    preset: None,
                     allow_insecure_localhost: false,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),

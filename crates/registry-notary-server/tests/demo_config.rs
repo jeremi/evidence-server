@@ -124,7 +124,8 @@ fn opencrvs_dci_demo_config_loads_validates_and_builds_router() {
             "REGISTRY_NOTARY_API_KEY_HASH",
             "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
         );
-        std::env::set_var("OPENCRVS_DCI_TOKEN", "test-opencrvs-dci-token");
+        std::env::set_var("DCI_CLIENT_ID", "test-opencrvs-dci-client");
+        std::env::set_var("DCI_CLIENT_SECRET", "test-opencrvs-dci-secret");
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 

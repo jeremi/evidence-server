@@ -63,22 +63,22 @@ enum Command {
         /// Subject id for record-level live probes. Output is redacted.
         #[arg(long)]
         subject_id: Option<String>,
-        /// Subject id type used by DCI idtype-value probes.
-        #[arg(long, default_value = "UIN")]
-        subject_id_type: String,
+        /// Override the lookup field used by DCI idtype-value probes.
+        #[arg(long)]
+        subject_id_type: Option<String>,
         /// Validate local VC issuing setup. This does not print credentials.
         #[arg(long)]
         issue_demo_vc: bool,
-        /// Print preset-expanded config with no secret values.
+        /// Print resolved config with no secret values.
         #[arg(long)]
         show_expanded_config: bool,
     },
-    /// Print preset-expanded config and required env vars.
+    /// Print resolved config and required env vars.
     ExplainConfig,
-    /// Generate starter files for a known setup.
+    /// Generate starter files.
     Init {
         #[command(subcommand)]
-        preset: InitCommand,
+        template: InitCommand,
     },
     /// Generate or hash a Registry Notary API key.
     HashApiKey {
@@ -106,11 +106,26 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum InitCommand {
-    /// Generate an OpenCRVS DCI birth-record demo skeleton.
-    OpencrvsDci {
+    /// Generate a generic DCI source starter skeleton.
+    Dci {
         /// Output directory for generated files.
         #[arg(long, default_value = ".")]
         output: PathBuf,
+        /// DCI upstream base URL.
+        #[arg(long, default_value = "https://dci.example.test")]
+        base_url: String,
+        /// DCI OAuth token URL.
+        #[arg(long, default_value = "https://dci.example.test/oauth2/client/token")]
+        token_url: String,
+        /// DCI lookup field used by idtype-value queries.
+        #[arg(long, default_value = "SUBJECT_ID")]
+        lookup_field: String,
+        /// Claim id to generate.
+        #[arg(long, default_value = "dci-record-exists")]
+        claim_id: String,
+        /// Human-readable claim title.
+        #[arg(long, default_value = "DCI record exists")]
+        claim_title: String,
         /// Include local VC issuer wiring and a generated issuer key.
         #[arg(long)]
         demo_issuer: bool,
@@ -123,9 +138,6 @@ enum InitCommand {
         /// Print generated local secrets to stdout.
         #[arg(long)]
         print_secrets: bool,
-        /// Claim template to generate.
-        #[arg(long, default_value = "birth-summary")]
-        claims: String,
     },
 }
 
@@ -234,23 +246,31 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             explain_config(config_path, &env_report)?;
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::Init { preset }) => {
-            match preset {
-                InitCommand::OpencrvsDci {
+        Some(Command::Init { template }) => {
+            match template {
+                InitCommand::Dci {
                     output,
+                    base_url,
+                    token_url,
+                    lookup_field,
+                    claim_id,
+                    claim_title,
                     demo_issuer,
                     with_env_file,
                     force,
                     print_secrets,
-                    claims,
-                } => init_opencrvs_dci(
+                } => init_dci(
                     &output,
-                    InitOpencrvsOptions {
+                    InitDciOptions {
+                        base_url,
+                        token_url,
+                        lookup_field,
+                        claim_id,
+                        claim_title,
                         demo_issuer,
                         with_env_file,
                         force,
                         print_secrets,
-                        claims,
                     },
                 )?,
             }
@@ -321,7 +341,6 @@ fn load_expanded_config(
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
     let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&raw)?;
-    let config = config.with_expanded_presets()?;
     config.validate()?;
     Ok(config)
 }
@@ -418,7 +437,7 @@ fn env_file_error(line: usize, reason: &str) -> EnvFileError {
 struct DoctorOptions {
     live: bool,
     subject_id: Option<String>,
-    subject_id_type: String,
+    subject_id_type: Option<String>,
     issue_demo_vc: bool,
     show_expanded_config: bool,
 }
@@ -457,22 +476,6 @@ async fn doctor(
         }
     };
     let config = match parsed {
-        Some(config) => match config.with_expanded_presets() {
-            Ok(config) => {
-                diagnostics.push(Diagnostic::ok("source presets expanded"));
-                Some(config)
-            }
-            Err(err) => {
-                diagnostics.push(Diagnostic::fail(
-                    format!("source preset expansion failed: {err}"),
-                    "use a known preset or remove the preset field",
-                ));
-                None
-            }
-        },
-        None => None,
-    };
-    let config = match config {
         Some(config) => {
             match config.validate() {
                 Ok(()) => diagnostics.push(Diagnostic::ok("config semantics validated")),
@@ -488,13 +491,13 @@ async fn doctor(
     if let Some(config) = &config {
         diagnostics.extend(local_env_diagnostics(config, env_report));
         diagnostics.extend(vc_diagnostics(config, options.issue_demo_vc));
-        diagnostics.extend(dci_diagnostics(config, &options.subject_id_type));
+        diagnostics.extend(dci_diagnostics(config, options.subject_id_type.as_deref()));
         if options.live {
             diagnostics.extend(
                 live_diagnostics(
                     config,
                     options.subject_id.as_deref(),
-                    &options.subject_id_type,
+                    options.subject_id_type.as_deref(),
                 )
                 .await,
             );
@@ -696,7 +699,7 @@ fn vc_diagnostics(config: &StandaloneRegistryNotaryConfig, issue_demo_vc: bool) 
 
 fn dci_diagnostics(
     config: &StandaloneRegistryNotaryConfig,
-    subject_id_type: &str,
+    subject_id_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (connection_id, connection) in &config.evidence.source_connections {
@@ -708,7 +711,7 @@ fn dci_diagnostics(
             Err(err) => {
                 diagnostics.push(Diagnostic::fail(
                     format!("{connection_id} DCI expansion failed: {err}"),
-                    "fix the source preset or DCI block",
+                    "fix the DCI block",
                 ));
                 continue;
             }
@@ -719,8 +722,14 @@ fn dci_diagnostics(
                 "set records_path to the JSON pointer containing registry records",
             ));
         } else {
+            let lookup_field = subject_id_type
+                .or_else(|| {
+                    first_dci_binding_for_connection(config, connection_id)
+                        .map(|binding| binding.lookup.field.as_str())
+                })
+                .unwrap_or("configured lookup field");
             diagnostics.push(Diagnostic::ok(format!(
-                "{connection_id} DCI request can be constructed for subject id type {subject_id_type}"
+                "{connection_id} DCI request can be constructed for lookup field {lookup_field}"
             )));
         }
     }
@@ -730,7 +739,7 @@ fn dci_diagnostics(
 async fn live_diagnostics(
     config: &StandaloneRegistryNotaryConfig,
     subject_id: Option<&str>,
-    subject_id_type: &str,
+    subject_id_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
@@ -884,7 +893,7 @@ async fn dci_record_probe(
     connection: &registry_notary_core::SourceConnectionConfig,
     token: &str,
     subject_id: &str,
-    subject_id_type: &str,
+    subject_id_type: Option<&str>,
 ) -> Diagnostic {
     let Some(binding) = first_dci_binding_for_connection(config, connection_id) else {
         return Diagnostic::ok(format!(
@@ -896,7 +905,7 @@ async fn dci_record_probe(
         Err(err) => {
             return Diagnostic::fail(
                 format!("{connection_id} DCI expansion failed during live probe: {err}"),
-                "fix the source preset or DCI block",
+                "fix the DCI block",
             );
         }
     };
@@ -949,7 +958,7 @@ async fn dci_record_probe(
     if !status.is_success() {
         return Diagnostic::fail(
             format!("{connection_id} DCI live probe returned {status}"),
-            "check the sample subject, DCI auth, and OpenCRVS DCI request settings",
+            "check the sample subject, DCI auth, and source DCI request settings",
         );
     }
     let body = match response.json::<Value>().await {
@@ -967,7 +976,7 @@ async fn dci_record_probe(
         )),
         Some(_) => Diagnostic::fail(
             format!("{connection_id} DCI records_path resolved but contained no records"),
-            "check the redacted sample subject id exists in the OpenCRVS demo environment",
+            "check the redacted sample subject id exists in the upstream demo or test environment",
         ),
         None => Diagnostic::fail(
             format!("{connection_id} DCI records_path did not resolve in live response"),
@@ -1009,14 +1018,14 @@ fn dci_probe_body(
     dci: &registry_notary_core::DciSourceConnectionConfig,
     binding: &registry_notary_core::SourceBindingConfig,
     subject_id: &str,
-    subject_id_type: &str,
+    subject_id_type: Option<&str>,
 ) -> Result<Value, String> {
     let message_id = Ulid::new().to_string();
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|err| err.to_string())?;
     let lookup_field = if dci.query_type == "idtype-value" {
-        subject_id_type
+        subject_id_type.unwrap_or(binding.lookup.field.as_str())
     } else {
         binding.lookup.field.as_str()
     };
@@ -1184,21 +1193,20 @@ fn redact_value(value: &mut Value) {
 }
 
 #[derive(Debug)]
-struct InitOpencrvsOptions {
+struct InitDciOptions {
+    base_url: String,
+    token_url: String,
+    lookup_field: String,
+    claim_id: String,
+    claim_title: String,
     demo_issuer: bool,
     with_env_file: bool,
     force: bool,
     print_secrets: bool,
-    claims: String,
 }
 
-fn init_opencrvs_dci(
-    output: &Path,
-    options: InitOpencrvsOptions,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if options.claims != "birth-summary" {
-        return Err("only --claims birth-summary is currently supported".into());
-    }
+fn init_dci(output: &Path, options: InitDciOptions) -> Result<(), Box<dyn std::error::Error>> {
+    validate_init_dci_options(&options)?;
     fs::create_dir_all(output)?;
     let api_key = random_secret("rn_api");
     let api_hash = sha256_hash(&api_key);
@@ -1209,35 +1217,32 @@ fn init_opencrvs_dci(
         None
     };
     write_generated_file(
-        &output.join("opencrvs-notary.yaml"),
-        &opencrvs_config_yaml(options.demo_issuer),
+        &output.join("dci-notary.yaml"),
+        &dci_config_yaml(&options),
         options.force,
         false,
     )?;
     write_generated_file(
         &output.join(".env.local.example"),
-        &opencrvs_env_example(options.demo_issuer),
+        &dci_env_example(options.demo_issuer),
         options.force,
         false,
     )?;
     if options.with_env_file {
         write_generated_file(
             &output.join(".env.local"),
-            &opencrvs_env_local(&api_key, &api_hash, &audit_secret, issuer_jwk.as_deref()),
+            &dci_env_local(&api_key, &api_hash, &audit_secret, issuer_jwk.as_deref()),
             options.force,
             true,
         )?;
     }
     write_generated_file(
-        &output.join("README.opencrvs-dci.md"),
-        opencrvs_readme(),
+        &output.join("README.dci.md"),
+        dci_readme(),
         options.force,
         false,
     )?;
-    println!(
-        "Generated OpenCRVS DCI starter files in {}",
-        output.display()
-    );
+    println!("Generated DCI starter files in {}", output.display());
     if options.print_secrets {
         println!("REGISTRY_NOTARY_LOCAL_API_KEY={api_key}");
         println!("REGISTRY_NOTARY_API_KEY_HASH={api_hash}");
@@ -1252,6 +1257,28 @@ fn init_opencrvs_dci(
             "Run `registry-notary hash-api-key --print-secret` to create local API credentials."
         );
     }
+    Ok(())
+}
+
+fn validate_init_dci_options(options: &InitDciOptions) -> Result<(), Box<dyn std::error::Error>> {
+    for (name, value) in [
+        ("base_url", options.base_url.as_str()),
+        ("token_url", options.token_url.as_str()),
+        ("lookup_field", options.lookup_field.as_str()),
+        ("claim_id", options.claim_id.as_str()),
+        ("claim_title", options.claim_title.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!("{name} must not be empty").into());
+        }
+        if value.contains(['\n', '\r']) {
+            return Err(format!("{name} must not contain line breaks").into());
+        }
+    }
+    reqwest::Url::parse(&options.base_url)
+        .map_err(|err| format!("base_url must be an absolute URL: {err}"))?;
+    reqwest::Url::parse(&options.token_url)
+        .map_err(|err| format!("token_url must be an absolute URL: {err}"))?;
     Ok(())
 }
 
@@ -1275,23 +1302,30 @@ fn write_generated_file(
     Ok(())
 }
 
-fn opencrvs_config_yaml(demo_issuer: bool) -> String {
-    let credential_profile = if demo_issuer {
-        r#"
+fn dci_config_yaml(options: &InitDciOptions) -> String {
+    let claim_id = yaml_string(&options.claim_id);
+    let claim_title = yaml_string(&options.claim_title);
+    let base_url = yaml_string(&options.base_url);
+    let token_url = yaml_string(&options.token_url);
+    let lookup_field = yaml_string(&options.lookup_field);
+    let credential_profile = if options.demo_issuer {
+        format!(
+            r#"
   credential_profiles:
-    opencrvs_birth_summary_sd_jwt:
+    dci_record_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:localhost
       issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:localhost#registry-notary-demo
-      vct: https://registry-notary.local/credentials/opencrvs-birth-summary
-      allowed_claims: [opencrvs-birth-record-exists]
+      vct: https://registry-notary.local/credentials/dci-record
+      allowed_claims: [{claim_id}]
 "#
+        )
     } else {
-        ""
+        String::new()
     };
-    let claim_profiles = if demo_issuer {
-        "      credential_profiles: [opencrvs_birth_summary_sd_jwt]\n"
+    let claim_profiles = if options.demo_issuer {
+        "      credential_profiles: [dci_record_sd_jwt]\n"
     } else {
         ""
     };
@@ -1303,41 +1337,45 @@ auth:
   api_keys:
     - id: local-demo
       hash_env: REGISTRY_NOTARY_API_KEY_HASH
-      scopes: [opencrvs:evidence_verification]
+      scopes: [dci:evidence_verification]
 audit:
   sink: file
-  path: ./opencrvs-notary.audit.jsonl
+  path: ./dci-notary.audit.jsonl
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 evidence:
   enabled: true
-  service_id: opencrvs-dci-demo
+  service_id: dci-notary-demo
   source_connections:
-    opencrvs_birth_records:
-      preset: opencrvs_birth_dci
-      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
+    dci_registry:
+      base_url: {base_url}
       source_auth:
         type: oauth2_client_credentials
-        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
-        client_id_env: OPENCRVS_DCI_CLIENT_ID
-        client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
+        token_url: {token_url}
+        client_id_env: DCI_CLIENT_ID
+        client_secret_env: DCI_CLIENT_SECRET
         request_format: json
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
 {credential_profile}  claims:
-    - id: opencrvs-birth-record-exists
-      title: OpenCRVS birth record exists
+    - id: {claim_id}
+      title: {claim_title}
       version: 2026-05
       subject_type: person
       value:
         type: boolean
 {claim_profiles}      source_bindings:
-        birth_record:
+        record:
           connector: dci
-          connection: opencrvs_birth_records
-          required_scope: opencrvs:evidence_verification
-          dataset: birth_records
-          entity: birth_record
+          connection: dci_registry
+          required_scope: dci:evidence_verification
+          dataset: registry_records
+          entity: record
           lookup:
             input: subject_id
-            field: UIN
+            field: {lookup_field}
             op: eq
             cardinality: one
           fields:
@@ -1347,7 +1385,7 @@ evidence:
               required: false
       rule:
         type: exists
-        source: birth_record
+        source: record
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -1356,6 +1394,10 @@ evidence:
         - application/dc+sd-jwt
 "#
     )
+}
+
+fn yaml_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn cli_fetch_url_policy(
@@ -1376,7 +1418,7 @@ fn cli_fetch_url_policy(
     }
 }
 
-fn opencrvs_env_example(demo_issuer: bool) -> String {
+fn dci_env_example(demo_issuer: bool) -> String {
     let issuer = if demo_issuer {
         "REGISTRY_NOTARY_ISSUER_JWK=<generated by registry-notary demo-issuer-key>\n"
     } else {
@@ -1387,13 +1429,13 @@ fn opencrvs_env_example(demo_issuer: bool) -> String {
 REGISTRY_NOTARY_API_KEY=<random local API key>
 REGISTRY_NOTARY_API_KEY_HASH=sha256:<64 hex>
 REGISTRY_NOTARY_AUDIT_HASH_SECRET=<random local audit secret>
-OPENCRVS_DCI_CLIENT_ID=<OpenCRVS DCI client id>
-OPENCRVS_DCI_CLIENT_SECRET=<OpenCRVS DCI client secret>
+DCI_CLIENT_ID=<DCI OAuth client id>
+DCI_CLIENT_SECRET=<DCI OAuth client secret>
 {issuer}"#
     )
 }
 
-fn opencrvs_env_local(
+fn dci_env_local(
     api_key: &str,
     api_hash: &str,
     audit_secret: &str,
@@ -1406,23 +1448,25 @@ fn opencrvs_env_local(
         r#"REGISTRY_NOTARY_API_KEY={api_key}
 REGISTRY_NOTARY_API_KEY_HASH={api_hash}
 REGISTRY_NOTARY_AUDIT_HASH_SECRET={audit_secret}
-OPENCRVS_DCI_CLIENT_ID=replace-me
-OPENCRVS_DCI_CLIENT_SECRET=replace-me
+DCI_CLIENT_ID=replace-me
+DCI_CLIENT_SECRET=replace-me
 {issuer}"#
     )
 }
 
-fn opencrvs_readme() -> &'static str {
-    r#"# OpenCRVS DCI Registry Notary Demo
+fn dci_readme() -> &'static str {
+    r#"# DCI Registry Notary Starter
 
-1. Fill `OPENCRVS_DCI_CLIENT_ID` and `OPENCRVS_DCI_CLIENT_SECRET` in `.env.local`.
-2. Run `registry-notary doctor --config opencrvs-notary.yaml --env-file .env.local`.
-3. Run `registry-notary doctor --config opencrvs-notary.yaml --env-file .env.local --live`.
-4. Start with `registry-notary --config opencrvs-notary.yaml --env-file .env.local`.
+1. Fill `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `.env.local`.
+2. Edit `dci-notary.yaml` for the DCI server's base URL, token URL, query type,
+   registry filters, lookup field, and records path.
+3. Run `registry-notary doctor --config dci-notary.yaml --env-file .env.local`.
+4. Run `registry-notary doctor --config dci-notary.yaml --env-file .env.local --live`.
+5. Start with `registry-notary --config dci-notary.yaml --env-file .env.local`.
 
-The generated config uses the generic `source_auth` OAuth client-credentials
-flow and the generic preset mechanism. `opencrvs_birth_dci` only supplies DCI
-request defaults, never secrets.
+The generated config uses explicit DCI config fields and generic
+`source_auth.type = oauth2_client_credentials`. It does not depend on any
+built-in registry-specific code path.
 "#
 }
 
@@ -1595,7 +1639,7 @@ mod tests {
             return StatusCode::BAD_REQUEST.into_response();
         }
         let query = &body["message"]["search_request"][0]["search_criteria"]["query"];
-        if query["type"] != json!("UIN") || query["value"] != json!("secret-subject-123") {
+        if query["type"] != json!("SUBJECT_ID") || query["value"] != json!("secret-subject-123") {
             return StatusCode::BAD_REQUEST.into_response();
         }
         Json(json!({
@@ -1683,17 +1727,29 @@ CLIENT_SECRET='secret value'
         assert!(!format!("{jwk:?}").contains("[redacted]"));
     }
 
+    fn test_dci_options(demo_issuer: bool) -> InitDciOptions {
+        InitDciOptions {
+            base_url: "https://dci.example.test".to_string(),
+            token_url: "https://dci.example.test/oauth2/client/token".to_string(),
+            lookup_field: "SUBJECT_ID".to_string(),
+            claim_id: "dci-record-exists".to_string(),
+            claim_title: "DCI record exists".to_string(),
+            demo_issuer,
+            with_env_file: false,
+            force: false,
+            print_secrets: false,
+        }
+    }
+
     #[test]
-    fn generated_opencrvs_config_uses_generic_oauth_and_preset() {
-        let yaml = opencrvs_config_yaml(true);
-        assert!(yaml.contains("preset: opencrvs_birth_dci"));
+    fn generated_dci_config_uses_explicit_dci_and_generic_oauth() {
+        let yaml = dci_config_yaml(&test_dci_options(true));
+        assert!(!yaml.contains("preset:"));
         assert!(yaml.contains("type: oauth2_client_credentials"));
-        assert!(yaml.contains("client_id_env: OPENCRVS_DCI_CLIENT_ID"));
+        assert!(yaml.contains("client_id_env: DCI_CLIENT_ID"));
+        assert!(yaml.contains("field: 'SUBJECT_ID'"));
         let config: StandaloneRegistryNotaryConfig =
             serde_norway::from_str(&yaml).expect("generated config parses");
-        let config = config
-            .with_expanded_presets()
-            .expect("generated presets expand");
         config.validate().expect("generated config validates");
     }
 
@@ -1706,28 +1762,56 @@ CLIENT_SECRET='secret value'
     }
 
     #[test]
-    fn dci_probe_body_uses_subject_id_type_for_idtype_value_queries() {
+    fn dci_probe_body_uses_binding_lookup_field_for_idtype_value_queries_by_default() {
         let config: StandaloneRegistryNotaryConfig =
-            serde_norway::from_str(&opencrvs_config_yaml(false)).expect("generated config parses");
-        let config = config.with_expanded_presets().expect("preset expands");
+            serde_norway::from_str(&dci_config_yaml(&test_dci_options(false)))
+                .expect("generated config parses");
         let connection = config
             .evidence
             .source_connections
-            .get("opencrvs_birth_records")
+            .get("dci_registry")
             .expect("connection exists");
-        let binding = first_dci_binding_for_connection(&config, "opencrvs_birth_records")
-            .expect("dci binding exists");
+        let binding =
+            first_dci_binding_for_connection(&config, "dci_registry").expect("dci binding exists");
         let body = dci_probe_body(
             &connection.effective_dci().expect("effective dci"),
             binding,
             "secret-subject-123",
-            "UIN",
+            None,
         )
         .expect("body builds");
         assert_eq!(
             body["message"]["search_request"][0]["search_criteria"]["query"],
             json!({
-                "type": "UIN",
+                "type": "SUBJECT_ID",
+                "value": "secret-subject-123"
+            })
+        );
+    }
+
+    #[test]
+    fn dci_probe_body_allows_subject_id_type_override_for_idtype_value_queries() {
+        let config: StandaloneRegistryNotaryConfig =
+            serde_norway::from_str(&dci_config_yaml(&test_dci_options(false)))
+                .expect("generated config parses");
+        let connection = config
+            .evidence
+            .source_connections
+            .get("dci_registry")
+            .expect("connection exists");
+        let binding =
+            first_dci_binding_for_connection(&config, "dci_registry").expect("dci binding exists");
+        let body = dci_probe_body(
+            &connection.effective_dci().expect("effective dci"),
+            binding,
+            "secret-subject-123",
+            Some("NATIONAL_ID"),
+        )
+        .expect("body builds");
+        assert_eq!(
+            body["message"]["search_request"][0]["search_criteria"]["query"],
+            json!({
+                "type": "NATIONAL_ID",
                 "value": "secret-subject-123"
             })
         );
@@ -1749,7 +1833,7 @@ CLIENT_SECRET='secret value'
             .expect("upstream address")
             .to_string();
         let config = doctor_live_test_config(base_url.trim_end_matches('/'));
-        let diagnostics = live_diagnostics(&config, Some("secret-subject-123"), "UIN").await;
+        let diagnostics = live_diagnostics(&config, Some("secret-subject-123"), None).await;
 
         assert!(
             state.token_called.load(Ordering::SeqCst),
@@ -1791,15 +1875,14 @@ auth:
   api_keys:
     - id: local
       hash_env: TEST_DOCTOR_API_HASH
-      scopes: [opencrvs:evidence_verification]
+      scopes: [dci:evidence_verification]
 audit:
   sink: stdout
 evidence:
   enabled: true
   service_id: doctor-live-test
   source_connections:
-    opencrvs_birth_records:
-      preset: opencrvs_birth_dci
+    dci_registry:
       base_url: "{base_url}"
       allow_insecure_localhost: true
       source_auth:
@@ -1808,23 +1891,28 @@ evidence:
         client_id_env: TEST_DOCTOR_OAUTH_CLIENT_ID
         client_secret_env: TEST_DOCTOR_OAUTH_CLIENT_SECRET
         request_format: json
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
   claims:
-    - id: opencrvs-birth-record-exists
-      title: OpenCRVS birth record exists
+    - id: dci-record-exists
+      title: DCI record exists
       version: 2026-05
       subject_type: person
       value:
         type: boolean
       source_bindings:
-        birth_record:
+        record:
           connector: dci
-          connection: opencrvs_birth_records
-          required_scope: opencrvs:evidence_verification
-          dataset: birth_records
-          entity: birth_record
+          connection: dci_registry
+          required_scope: dci:evidence_verification
+          dataset: registry_records
+          entity: record
           lookup:
             input: subject_id
-            field: UIN
+            field: SUBJECT_ID
             op: eq
             cardinality: one
           fields:
@@ -1834,7 +1922,7 @@ evidence:
               required: false
       rule:
         type: exists
-        source: birth_record
+        source: record
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -1842,9 +1930,6 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
         );
-        serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw)
-            .expect("config parses")
-            .with_expanded_presets()
-            .expect("preset expands")
+        serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw).expect("config parses")
     }
 }

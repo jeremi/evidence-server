@@ -1,73 +1,55 @@
-# OpenCRVS DCI Demo
+# OpenCRVS DCI Demo Notes
 
-This note documents the local Registry Notary demo config for using the
-OpenCRVS DCI CRVS API as an evidence source.
+OpenCRVS is configured through normal DCI source settings. Registry Notary does
+not contain an OpenCRVS-specific initializer or built-in source preset.
 
-## Scope
+For the full standalone flow, see
+[`opencrvs-dci-standalone-tutorial.md`](opencrvs-dci-standalone-tutorial.md).
 
-The demo config is:
+## Generic Starter
 
-`demo/config/opencrvs-dci-registry-notary.yaml`
-
-It targets:
-
-`https://dci-crvs-api.farajaland-integration.opencrvs.dev/registry/sync/search`
-
-The tested query shape is DCI `idtype-value` with `query.type = UIN` and
-`reg_event_type = birth`.
-
-## Environment
-
-Fetch an OpenCRVS client-credentials token before starting Registry Notary:
+Start with the generic DCI initializer:
 
 ```bash
-export OPENCRVS_DCI_CLIENT_ID='<OpenCRVS client id>'
-export OPENCRVS_DCI_CLIENT_SECRET='<OpenCRVS client secret>'
-export OPENCRVS_DCI_TOKEN="$(
-  curl -fsS \
-    -H 'content-type: application/json' \
-    -d "{\"client_id\":\"$OPENCRVS_DCI_CLIENT_ID\",\"client_secret\":\"$OPENCRVS_DCI_CLIENT_SECRET\",\"grant_type\":\"client_credentials\"}" \
-    https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token |
-    jq -r .access_token
-)"
-export REGISTRY_NOTARY_API_KEY="$(openssl rand -hex 32)"
-export REGISTRY_NOTARY_API_KEY_HASH="$(
-  printf '%s' "$REGISTRY_NOTARY_API_KEY" |
-    openssl dgst -sha256 -r |
-    awk '{print "sha256:" $1}'
-)"
-export REGISTRY_NOTARY_AUDIT_HASH_SECRET='<stable audit hash secret>'
+registry-notary init dci \
+  --with-env-file \
+  --demo-issuer \
+  --base-url https://dci-crvs-api.farajaland-integration.opencrvs.dev \
+  --token-url https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token \
+  --lookup-field UIN \
+  --claim-id opencrvs-birth-record-exists \
+  --claim-title "OpenCRVS birth record exists"
 ```
 
-Then run:
+Then edit `dci-notary.yaml` to include the OpenCRVS DCI filters:
 
-```bash
-cargo run -p registry-notary-bin -- \
-  --config demo/config/opencrvs-dci-registry-notary.yaml
+```yaml
+dci:
+  search_path: /registry/sync/search
+  sender_id: registry-notary
+  query_type: idtype-value
+  registry_type: ns:org:RegistryType:Civil
+  registry_event_type: birth
+  records_path: /message/search_response/0/data/reg_records
 ```
 
-Use the plaintext `REGISTRY_NOTARY_API_KEY` value as the `x-api-key` request
-header when calling Registry Notary. The config stores only
-`REGISTRY_NOTARY_API_KEY_HASH`, which is the SHA-256 fingerprint of that local
-API key.
+Use `.env.local` for the OpenCRVS OAuth client credentials:
 
-## Claims
+```dotenv
+DCI_CLIENT_ID=<OpenCRVS DCI client id>
+DCI_CLIENT_SECRET=<OpenCRVS DCI client secret>
+```
 
-The demo exposes:
-
-- `opencrvs-birth-record-exists`
-
-The claim evaluates whether a registered OpenCRVS birth record exists for the
-subject id supplied as a UIN.
+Do not fetch or store an OpenCRVS bearer token manually. The generated
+`source_auth.type = oauth2_client_credentials` config handles token fetch and
+refresh.
 
 ## Current Interop Boundaries
 
-- The OpenCRVS DCI API issues short-lived OAuth client tokens. Registry Notary
-  currently reads the source bearer token from `OPENCRVS_DCI_TOKEN` at startup,
-  so long-running deployments need source OAuth refresh support instead of this
-  manual demo token flow.
-- The OpenCRVS DCI middleware accepts unsigned requests. If request signatures
-  become mandatory, Registry Notary needs real DCI request signing and a
+- The tested query shape is DCI `idtype-value` with `query.type = UIN`.
+- The tested event filter is `registry_event_type = birth`.
+- The OpenCRVS DCI middleware currently accepts unsigned requests. If request
+  signatures become mandatory, Registry Notary needs DCI request signing and a
   discoverable JWKS for the configured `sender_id`.
-- This config currently targets birth records. Death record checks should use a
-  separate DCI source connection or claim with `registry_event_type: death`.
+- Death record checks should use a separate DCI source connection or claim with
+  `registry_event_type: death`.
