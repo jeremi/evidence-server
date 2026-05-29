@@ -90,6 +90,25 @@ fn credential_issue_response_debug_redacts_credential_material() {
     assert!(!wrapped_debug.contains("disclosure-secret"));
 }
 
+#[test]
+fn notary_response_debug_keeps_non_sensitive_body_metadata() {
+    let response = NotaryResponse {
+        body: registry_notary_client::HealthResponse {
+            status: "ok".to_string(),
+            checks: json!({ "database": "ready" }),
+        },
+        request_id: Some("req-health".to_string()),
+        retry_after: None,
+    };
+
+    let debug = format!("{response:?}");
+
+    assert!(debug.contains("req-health"));
+    assert!(debug.contains("ok"));
+    assert!(debug.contains("database"));
+    assert!(!debug.contains("<redacted>"));
+}
+
 struct FixedAuthProvider;
 
 #[async_trait::async_trait]
@@ -745,6 +764,12 @@ async fn oid4vci_success_routes_parse_typed_responses() {
     );
     assert_eq!(nonce.body.c_nonce, "nonce-1");
     assert_eq!(credential.body.credential, "sd-jwt-credential");
+
+    let metadata_debug = format!("{metadata:?}");
+    assert!(metadata_debug.contains("https://issuer.example"));
+
+    let offer_debug = format!("{offer:?}");
+    assert!(offer_debug.contains("person_is_alive_sd_jwt"));
 
     let nonce_debug = format!("{nonce:?}");
     assert!(nonce_debug.contains("<redacted>"));

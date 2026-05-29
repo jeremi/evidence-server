@@ -8,6 +8,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::options::RetryAfter;
 
+#[doc(hidden)]
+pub trait SafeDebug {
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+}
+
+macro_rules! impl_safe_debug {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl SafeDebug for $t {
+                fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    fmt::Debug::fmt(self, f)
+                }
+            }
+        )*
+    };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluateResponse {
     pub results: Vec<ClaimResultView>,
@@ -79,6 +96,45 @@ pub struct HealthResponse {
     pub checks: serde_json::Value,
 }
 
+impl_safe_debug!(
+    EvaluateResponse,
+    ListClaimsResponse,
+    FormatsResponse,
+    CredentialIssueResponse,
+    CredentialStatusResponse,
+    AdminReloadResponse,
+    HealthResponse,
+    BatchEvaluateResponse,
+    serde_json::Value,
+    String,
+);
+
+impl<T: fmt::Debug> SafeDebug for Vec<T> {
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+#[cfg(feature = "oid4vci")]
+impl_safe_debug!(
+    registry_platform_oid4vci::CredentialIssuerMetadata,
+    registry_platform_oid4vci::CredentialOffer,
+);
+
+#[cfg(feature = "oid4vci")]
+impl SafeDebug for registry_platform_oid4vci::NonceResponse {
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+#[cfg(feature = "oid4vci")]
+impl SafeDebug for registry_platform_oid4vci::CredentialResponse {
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[derive(Clone)]
 pub struct NotaryResponse<T> {
     pub body: T,
@@ -86,10 +142,18 @@ pub struct NotaryResponse<T> {
     pub retry_after: Option<RetryAfter>,
 }
 
-impl<T> fmt::Debug for NotaryResponse<T> {
+struct SafeDebugBody<'a, T>(&'a T);
+
+impl<T: SafeDebug> fmt::Debug for SafeDebugBody<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_debug(f)
+    }
+}
+
+impl<T: SafeDebug> fmt::Debug for NotaryResponse<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NotaryResponse")
-            .field("body", &"<redacted>")
+            .field("body", &SafeDebugBody(&self.body))
             .field("request_id", &self.request_id)
             .field("retry_after", &self.retry_after)
             .finish()
@@ -136,6 +200,8 @@ impl Evaluation {
 pub struct BatchEvaluation {
     pub inner: BatchEvaluateResponse,
 }
+
+impl_safe_debug!(Evaluation, BatchEvaluation);
 
 impl BatchEvaluation {
     pub fn succeeded(&self) -> impl Iterator<Item = &BatchItemResponse> {
