@@ -15,8 +15,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_notary_client::auth::{AuthHeader, AuthProvider};
 use registry_notary_client::{
-    CredentialIssueResponse, NotaryClientBuildError, NotaryClientError, NotaryResponse,
-    RegistryNotaryClient, RequestOptions, RetryPolicy,
+    CredentialIssueResponse, EvaluateResponse, FormatsResponse, NotaryClientBuildError,
+    NotaryClientError, NotaryResponse, RegistryNotaryClient, RequestOptions, RetryPolicy,
 };
 use registry_notary_core::{BatchEvaluateResponse, BatchStatus, FORMAT_CLAIM_RESULT_JSON};
 use secrecy::SecretString;
@@ -147,8 +147,62 @@ async fn auth_provider_sends_redacted_dynamic_header() {
 }
 
 #[tokio::test]
-async fn batch_response_family_deserializes_from_wire_json() {
-    let value = json!({
+async fn public_response_dtos_deserialize_from_wire_json() {
+    let evaluate: EvaluateResponse = serde_json::from_value(json!({
+        "results": [
+            {
+                "evaluation_id": "eval-1",
+                "claim_id": "claim-a",
+                "claim_version": "2026-05",
+                "subject_type": "person",
+                "subject_ref": {
+                    "hash": "hmac-sha256:subject",
+                    "id_type": "NATIONAL_ID"
+                },
+                "value": true,
+                "satisfied": true,
+                "disclosure": "predicate",
+                "format": FORMAT_CLAIM_RESULT_JSON,
+                "issued_at": "2026-05-29T00:00:00Z",
+                "expires_at": null,
+                "provenance": {
+                    "source_count": 1,
+                    "source_versions": { "civil-registry": "2026-05" },
+                    "computed_by": "registry-notary"
+                }
+            }
+        ]
+    }))
+    .expect("evaluate response deserializes");
+    assert_eq!(evaluate.results[0].claim_id, "claim-a");
+    assert_eq!(
+        evaluate.results[0].subject_ref.hash.as_str(),
+        "hmac-sha256:subject"
+    );
+
+    let formats: FormatsResponse = serde_json::from_value(json!({
+        "formats": [
+            { "id": FORMAT_CLAIM_RESULT_JSON, "kind": "json", "status": "active" }
+        ]
+    }))
+    .expect("formats response deserializes");
+    assert_eq!(formats.formats[0].id, FORMAT_CLAIM_RESULT_JSON);
+
+    let credential: CredentialIssueResponse = serde_json::from_value(json!({
+        "credential_id": "cred-1",
+        "credential_profile": "person_alive",
+        "format": "vc+sd-jwt",
+        "issuer": "did:jwk:issuer",
+        "expires_at": "2026-05-29T00:10:00Z",
+        "credential": "header.payload.signature",
+        "issuer_signed_jwt": "header.payload.signature",
+        "disclosures": ["disclosure-1"]
+    }))
+    .expect("credential issue response deserializes");
+    assert_eq!(credential.credential_id, "cred-1");
+    assert_eq!(credential.disclosures, vec!["disclosure-1"]);
+
+    let batch_value = json!({
         "batch_id": "batch-1",
         "status": "completed",
         "claims": ["claim-a"],
@@ -157,7 +211,7 @@ async fn batch_response_family_deserializes_from_wire_json() {
     });
 
     let parsed: BatchEvaluateResponse =
-        serde_json::from_value(value).expect("batch response deserializes");
+        serde_json::from_value(batch_value).expect("batch response deserializes");
     assert_eq!(parsed.batch_id, "batch-1");
     assert!(matches!(parsed.status, BatchStatus::Completed));
 }

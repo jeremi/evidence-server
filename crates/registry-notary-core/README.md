@@ -6,6 +6,19 @@ primitives.
 This crate owns the serializable contracts shared by the server, binary, tests,
 and downstream tooling.
 
+## DTO Derive Policy
+
+Public HTTP wire DTOs in this crate should support both directions by default:
+derive or implement both `serde::Serialize` and `serde::Deserialize`. This
+keeps server-owned responses reusable by typed clients, fixtures, and contract
+tests. One-way contracts are allowed only when the type is intentionally
+write-only or read-only, and the type should carry a local comment explaining
+that exception.
+
+When compatibility requires a custom serde implementation, keep the type
+bidirectional. For example, `ClaimRef` serializes as the versioned object shape
+and manually deserializes both that object shape and the legacy string claim id.
+
 ## What It Provides
 
 - Standalone Registry Notary configuration types and validation.

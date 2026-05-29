@@ -493,6 +493,8 @@ impl DisclosureDowngrade {
     }
 }
 
+// Manual `Deserialize` keeps the legacy string form accepted while preserving
+// the public DTO default that wire types support both encode and decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimRef {
