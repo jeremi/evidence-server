@@ -19,5 +19,3 @@ pub fn issuer_jwk_guard() -> MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
-
-pub mod source_conformance;

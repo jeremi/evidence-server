@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Contract tests for source connector behavior at the Notary boundary.
 
-mod common;
+#[path = "common/source_conformance.rs"]
+mod source_conformance;
 
 use axum::http::StatusCode;
-use common::source_conformance::{
+use serde_json::{json, Value};
+use source_conformance::{
     assert_problem, audit_text, evaluate_claim, rda_connector_harness, RdaHarnessOptions,
     TEST_PURPOSE, TEST_SOURCE_TOKEN,
 };
-use serde_json::{json, Value};
 
 #[tokio::test]
 async fn rda_connector_conformance_positive_and_non_disclosure() {
