@@ -187,3 +187,56 @@ async fn rda_connector_conformance_upstream_error_is_bounded_and_not_retried_by_
         "source connector conformance disables retry by default for synchronous sources"
     );
 }
+
+#[tokio::test]
+async fn rda_connector_conformance_upstream_4xx_is_bounded() {
+    let harness = rda_connector_harness(RdaHarnessOptions::default()).await;
+
+    let response =
+        evaluate_claim(&harness.server, "upstream-bad-request", Some(TEST_PURPOSE)).await;
+
+    let body = assert_problem(
+        response,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
+    );
+    let body_text = serde_json::to_string(&body).expect("body serializes");
+    assert!(!body_text.contains("fixture rejected lookup"));
+    assert!(!body_text.contains("upstream-bad-request"));
+    assert!(!body_text.contains("fixture-private-field"));
+    assert_eq!(harness.source.total(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn rda_connector_conformance_upstream_timeout_is_bounded() {
+    let harness = rda_connector_harness(RdaHarnessOptions::default()).await;
+
+    let response = {
+        let request = evaluate_claim(&harness.server, "upstream-timeout", Some(TEST_PURPOSE));
+        tokio::pin!(request);
+        tokio::select! {
+            response = &mut request => response,
+            () = async {
+                for _ in 0..100 {
+                    if harness.source.total() > 0 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(harness.source.total(), 1);
+                tokio::time::advance(std::time::Duration::from_secs(11)).await;
+            } => request.await,
+        }
+    };
+
+    let body = assert_problem(
+        response,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
+    );
+    let body_text = serde_json::to_string(&body).expect("body serializes");
+    assert!(!body_text.contains("upstream-timeout"));
+    assert!(!body_text.contains("must-not-disclose"));
+    assert!(!body_text.contains("fixture_private_field"));
+    assert_eq!(harness.source.total(), 1);
+}

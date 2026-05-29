@@ -120,7 +120,7 @@ used by a claim profile. The current contract covers:
 - source auth denied by the upstream;
 - purpose denied by the upstream;
 - missing purpose denied before any source read;
-- upstream error without raw upstream disclosure;
+- upstream 4xx, 5xx, and timeout errors without raw upstream disclosure;
 - response, audit, and metrics non-disclosure for source tokens, subject ids,
   raw source rows, and private fixture fields.
 
