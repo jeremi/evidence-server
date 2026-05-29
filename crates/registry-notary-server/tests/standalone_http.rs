@@ -227,6 +227,7 @@ fn config(
       dci:
         search_path: /dci/fr/registry/sync/search
         query_type: idtype-value
+        registry_event_type: birth
         receiver_id: upstream-registry
         signature: ""
         records_path: /message/search_response/0/data/reg_records
@@ -2961,6 +2962,14 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query_type"],
         "idtype-value"
+    );
+    assert_eq!(
+        observed["message"]["search_request"][0]["search_criteria"]["reg_event_type"],
+        "birth"
+    );
+    assert_eq!(
+        observed["message"]["search_request"][0]["search_criteria"]["pagination"]["page_number"],
+        1
     );
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query"]["type"],

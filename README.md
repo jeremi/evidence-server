@@ -32,6 +32,12 @@ not import or link Registry Relay code.
 - [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
   OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
   and demo SD-JWT VC caveats.
+- [`docs/opencrvs-dci.md`](docs/opencrvs-dci.md):
+  OpenCRVS DCI demo setup, OAuth token bootstrap, and current interop
+  boundaries.
+- [`docs/opencrvs-dci-standalone-tutorial.md`](docs/opencrvs-dci-standalone-tutorial.md):
+  step-by-step standalone tutorial for running a built Registry Notary binary
+  against OpenCRVS DCI and issuing a demo SD-JWT VC.
 - [`docs/federated-notary-manifest-spec.md`](docs/federated-notary-manifest-spec.md):
   Registry Manifest-backed federation, peer discovery, trust, delegated
   evaluation, credential issuance, and audit checkpoint design.

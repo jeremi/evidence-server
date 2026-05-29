@@ -2105,11 +2105,17 @@ fn dci_search_criteria(
         ("query".to_string(), query),
         (
             "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(batch_size) }),
+            json!({ "page_size": dci.max_results.max(batch_size), "page_number": 1 }),
         ),
     ]);
     if let Some(registry_type) = &dci.registry_type {
         search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
+    }
+    if let Some(registry_event_type) = &dci.registry_event_type {
+        search_criteria.insert(
+            "reg_event_type".to_string(),
+            Value::String(registry_event_type.clone()),
+        );
     }
     if let Some(record_type) = &dci.record_type {
         search_criteria.insert(
@@ -2315,11 +2321,17 @@ fn dci_search_request_body(
         ("query".to_string(), query),
         (
             "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(2) }),
+            json!({ "page_size": dci.max_results.max(2), "page_number": 1 }),
         ),
     ]);
     if let Some(registry_type) = &dci.registry_type {
         search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
+    }
+    if let Some(registry_event_type) = &dci.registry_event_type {
+        search_criteria.insert(
+            "reg_event_type".to_string(),
+            Value::String(registry_event_type.clone()),
+        );
     }
     if let Some(record_type) = &dci.record_type {
         search_criteria.insert(

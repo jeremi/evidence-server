@@ -2763,6 +2763,8 @@ pub struct DciSourceConnectionConfig {
     #[serde(default)]
     pub registry_type: Option<String>,
     #[serde(default)]
+    pub registry_event_type: Option<String>,
+    #[serde(default)]
     pub record_type: Option<String>,
     #[serde(default)]
     pub field_paths: BTreeMap<String, String>,
@@ -2781,6 +2783,7 @@ impl Default for DciSourceConnectionConfig {
             bulk_records_path: default_dci_bulk_records_path(),
             max_results: default_dci_max_results(),
             registry_type: None,
+            registry_event_type: None,
             record_type: None,
             field_paths: BTreeMap::new(),
             signature: None,
