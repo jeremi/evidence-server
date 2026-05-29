@@ -898,6 +898,7 @@ impl NotaryClientBuilder {
 #[derive(Debug, Clone, Copy)]
 enum ErrorKind {
     Problem,
+    #[cfg_attr(not(feature = "oid4vci"), allow(dead_code))]
     Oid4vci,
 }
 
@@ -957,7 +958,7 @@ fn validate_base_url(url: &Url) -> Result<(), NotaryClientBuildError> {
     if url.scheme() == "https" {
         return Ok(());
     }
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(debug_assertions, feature = "test-support"))]
     {
         if url.scheme() == "http"
             && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
@@ -980,6 +981,7 @@ fn encode_path_segment(segment: &str) -> String {
         .collect()
 }
 
+#[cfg_attr(not(feature = "oid4vci"), allow(dead_code))]
 fn encode_query_value(value: &str) -> String {
     encode_path_segment(value).replace("%20", "+")
 }
