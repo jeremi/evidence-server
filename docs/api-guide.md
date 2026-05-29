@@ -89,6 +89,39 @@ concurrency and a per-batch source-read memo.
 
 Self-attestation callers cannot use batch evaluation.
 
+## Retry Contract
+
+Retries are opt-in for SDKs and integrations. Callers must not infer retry
+safety from the HTTP method alone because some `POST` routes perform evaluation,
+rendering, credential issuance, audit, replay, or status mutations.
+
+`Retry-After` can be a delta-seconds value such as `60` or an HTTP-date such as
+`Wed, 21 Oct 2015 07:28:00 GMT`. The server documents `Retry-After` only on
+responses that may emit it.
+
+| Method | Path | Automatic retry policy |
+| --- | --- | --- |
+| `GET` | `/healthz` | May retry transport errors, `429`, and `503` when caller opts in; no `Retry-After` is emitted. |
+| `GET` | `/ready` | May retry transport errors and `503` when caller opts in; no `Retry-After` is emitted. |
+| `GET` | `/openapi.json` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `GET` | `/.well-known/evidence-service` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `GET` | `/.well-known/evidence/jwks.json` | May retry transport errors, `429`, and `503` when caller opts in; honor `Cache-Control` for key caching. |
+| `GET` | `/.well-known/openid-credential-issuer` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `GET` | `/oid4vci/credential-offer` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `POST` | `/oid4vci/nonce` | Do not auto-retry by default; `429` can include `Retry-After` for caller-managed retry. |
+| `POST` | `/oid4vci/credential` | Do not auto-retry; proof and issuance workflows are not deduplicated. `429` can include `Retry-After` for caller-managed retry. |
+| `GET` | `/claims` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `GET` | `/claims/{claim_id}` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `GET` | `/formats` | May retry transport errors, `429`, and `503` when caller opts in. |
+| `POST` | `/claims/evaluate` | Do not auto-retry; evaluation and audit are not deduplicated. |
+| `POST` | `/claims/batch-evaluate` | May retry transport errors, `429`, and `503` only when the request includes `Idempotency-Key`; reusing the key with a different request body returns `409`. |
+| `POST` | `/evidence/render` | Do not auto-retry; rendering is not deduplicated. |
+| `POST` | `/credentials/issue` | Do not auto-retry; credential issuance and holder-proof replay are not deduplicated. |
+| `GET` | `/credentials/status/{credential_id}` | May retry transport errors and `503` when caller opts in; no `Retry-After` is emitted. |
+| `POST` | `/admin/credentials/status/{credential_id}` | Do not auto-retry; status mutation is not deduplicated. |
+| `POST` | `/admin/reload` | Do not auto-retry; admin mutation semantics are not deduplicated. |
+| `POST` | `/federation/v1/evaluations` | Do not auto-retry; signed delegated evaluation uses replay protection and is not deduplicated. |
+
 ## Render Evidence
 
 `POST /evidence/render`

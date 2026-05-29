@@ -1671,7 +1671,8 @@ fn retry_after_header() -> Value {
     json!({
         "description": "Optional delay, in seconds or HTTP-date form, before retrying a rate-limited or temporarily unavailable request.",
         "schema": {
-            "type": "string"
+            "type": "string",
+            "examples": ["60", "Wed, 21 Oct 2015 07:28:00 GMT"]
         }
     })
 }
@@ -2631,6 +2632,11 @@ mod tests {
             json!("string")
         );
         assert_eq!(
+            doc["paths"]["/claims/batch-evaluate"]["post"]["responses"]["429"]["headers"]
+                ["Retry-After"]["schema"]["examples"],
+            json!(["60", "Wed, 21 Oct 2015 07:28:00 GMT"])
+        );
+        assert_eq!(
             doc["paths"]["/.well-known/evidence/jwks.json"]["get"]["responses"]["200"]["headers"]
                 ["Cache-Control"]["schema"]["example"],
             json!("public, max-age=600")
@@ -2676,6 +2682,45 @@ mod tests {
             .as_array()
             .map(|parameters| parameters.iter().collect())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn retry_after_is_documented_only_where_server_emits_it() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let mut actual = Vec::new();
+        let paths = doc["paths"].as_object().expect("paths object");
+        for (path, path_item) in paths {
+            let Some(operations) = path_item.as_object() else {
+                continue;
+            };
+            for (method, operation) in operations {
+                let Some(responses) = operation["responses"].as_object() else {
+                    continue;
+                };
+                for (status, response) in responses {
+                    if response["headers"].get("Retry-After").is_some() {
+                        actual.push((path.as_str(), method.as_str(), status.as_str()));
+                    }
+                }
+            }
+        }
+        actual.sort_unstable();
+
+        let mut expected = vec![
+            ("/claims/batch-evaluate", "post", "429"),
+            ("/claims/batch-evaluate", "post", "503"),
+            ("/claims/evaluate", "post", "429"),
+            ("/claims/evaluate", "post", "503"),
+            ("/credentials/issue", "post", "429"),
+            ("/credentials/issue", "post", "503"),
+            ("/evidence/render", "post", "429"),
+            ("/evidence/render", "post", "503"),
+            ("/oid4vci/credential", "post", "429"),
+            ("/oid4vci/nonce", "post", "429"),
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

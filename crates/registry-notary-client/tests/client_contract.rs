@@ -16,7 +16,8 @@ use axum::{Json, Router};
 use registry_notary_client::auth::{AuthHeader, AuthProvider};
 use registry_notary_client::{
     CredentialIssueResponse, EvaluateResponse, FormatsResponse, NotaryClientBuildError,
-    NotaryClientError, NotaryResponse, RegistryNotaryClient, RequestOptions, RetryPolicy,
+    NotaryClientError, NotaryResponse, RegistryNotaryClient, RequestOptions, RetryAfter,
+    RetryPolicy,
 };
 use registry_notary_core::{BatchEvaluateResponse, BatchStatus, FORMAT_CLAIM_RESULT_JSON};
 use secrecy::SecretString;
@@ -605,6 +606,72 @@ async fn retry_after_delta_on_problem_controls_retry_delay() {
 }
 
 #[tokio::test]
+async fn retry_after_http_date_on_problem_controls_retry_delay() {
+    let state = Arc::new(AtomicUsize::new(0));
+    let app = Router::new()
+        .route("/claims", get(retry_after_http_date_then_claims_handler))
+        .with_state(Arc::clone(&state));
+    let base = spawn(app).await;
+    let retry_policy = RetryPolicy {
+        max_attempts: 2,
+        base_delay: Duration::from_secs(5),
+        max_delay: Duration::from_secs(5),
+        retry_unavailable: true,
+        ..RetryPolicy::default()
+    };
+    let client = RegistryNotaryClient::builder(base)
+        .retry_policy(retry_policy)
+        .build()
+        .expect("client builds");
+
+    let started = Instant::now();
+    let response = client
+        .list_claims(RequestOptions::default())
+        .await
+        .expect("past retry-after HTTP-date allows immediate retry");
+
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(response.body.data.is_empty());
+    assert_eq!(state.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn retry_after_http_date_is_exposed_on_problem_error() {
+    let app = Router::new().route(
+        "/claims",
+        get(|| async {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("retry-after", "Wed, 21 Oct 2015 07:28:00 GMT")],
+                Json(json!({
+                    "type": "https://docs.registry-notary.dev/problems/self-attestation/rate-limited",
+                    "title": "Self-attestation rate limited",
+                    "status": 429,
+                    "detail": "rate limited",
+                    "code": "self_attestation.rate_limited"
+                })),
+            )
+        }),
+    );
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .build()
+        .expect("client builds");
+
+    let error = client
+        .list_claims(RequestOptions::default())
+        .await
+        .expect_err("429 problem maps");
+
+    assert_eq!(
+        error.retry_after(),
+        Some(&RetryAfter::HttpDate(
+            "Wed, 21 Oct 2015 07:28:00 GMT".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
 async fn decode_error_display_is_opaque() {
     let app = Router::new().route(
         "/claims",
@@ -753,6 +820,7 @@ async fn oid4vci_errors_use_oid4vci_envelope() {
                 error,
                 request_id: None,
                 retry_after: None,
+                server_date: None,
             }
             .portable();
             let rendered = serde_json::to_value(portable).expect("portable serializes");
@@ -965,6 +1033,30 @@ async fn retry_after_then_claims_handler(State(counter): State<Arc<AtomicUsize>>
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [("retry-after", "0")],
+            Json(json!({
+                "type": "https://docs.registry-notary.dev/problems/source/unavailable",
+                "title": "Source unavailable",
+                "status": 503,
+                "detail": "source unavailable",
+                "code": "source.unavailable"
+            })),
+        )
+            .into_response();
+    }
+    Json(json!({ "data": [] })).into_response()
+}
+
+async fn retry_after_http_date_then_claims_handler(
+    State(counter): State<Arc<AtomicUsize>>,
+) -> Response {
+    let call = counter.fetch_add(1, Ordering::SeqCst) + 1;
+    if call == 1 {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                ("date", "Wed, 21 Oct 2099 07:28:00 GMT"),
+                ("retry-after", "Wed, 21 Oct 2099 07:28:00 GMT"),
+            ],
             Json(json!({
                 "type": "https://docs.registry-notary.dev/problems/source/unavailable",
                 "title": "Source unavailable",

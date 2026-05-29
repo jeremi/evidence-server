@@ -106,6 +106,7 @@ pub enum NotaryClientError {
         problem: Box<ProblemDetails>,
         request_id: Option<String>,
         retry_after: Option<RetryAfter>,
+        server_date: Option<String>,
     },
     #[error("openid4vci error: {error}")]
     Oid4vci {
@@ -113,6 +114,7 @@ pub enum NotaryClientError {
         error: Oid4vciError,
         request_id: Option<String>,
         retry_after: Option<RetryAfter>,
+        server_date: Option<String>,
     },
     #[error("failed to decode response body")]
     Decode {
@@ -158,6 +160,15 @@ impl NotaryClientError {
         match self {
             Self::Problem { retry_after, .. } | Self::Oid4vci { retry_after, .. } => {
                 retry_after.as_ref()
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn server_date(&self) -> Option<&str> {
+        match self {
+            Self::Problem { server_date, .. } | Self::Oid4vci { server_date, .. } => {
+                server_date.as_deref()
             }
             _ => None,
         }
