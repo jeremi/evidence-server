@@ -74,6 +74,13 @@ operational scrape route and is intentionally excluded from OpenAPI.
 are intentionally bounded by Registry Notary configuration, so the route has no
 pagination parameters.
 
+`Idempotency-Key` is supported only on `POST /claims/batch-evaluate`.
+Successful batch responses are cached for a 15-minute window, scoped by caller
+and route. Reusing the same key with the same request returns the cached batch
+response; reusing it with a different request returns `409`. Other POST routes
+do not provide idempotent retry semantics today and ignore the header if a
+client sends it. OpenAPI advertises the header only on batch evaluation.
+
 ## Federated Evaluation
 
 Registry Notary includes a first federation slice for static-peer delegated

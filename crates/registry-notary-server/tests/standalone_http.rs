@@ -2929,6 +2929,106 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 }
 
 #[tokio::test]
+async fn idempotency_key_contract_matches_supported_post_route_matrix() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    for claim in &mut config.evidence.claims {
+        claim.operations.batch_evaluate.enabled = true;
+        claim.operations.batch_evaluate.max_subjects = 2;
+    }
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let evaluate_payload = json!({
+        "subject": { "id": "person-1" },
+        "claims": ["farmed-land-size"],
+        "disclosure": "value"
+    });
+    let first_evaluate = server
+        .post("/claims/evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "unsupported-evaluate-key")
+        .json(&evaluate_payload)
+        .await;
+    first_evaluate.assert_status_ok();
+    let first_evaluate_body: Value = first_evaluate.json();
+    let second_evaluate = server
+        .post("/claims/evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "unsupported-evaluate-key")
+        .json(&evaluate_payload)
+        .await;
+    second_evaluate.assert_status_ok();
+    let second_evaluate_body: Value = second_evaluate.json();
+    assert_ne!(
+        first_evaluate_body["results"][0]["evaluation_id"],
+        second_evaluate_body["results"][0]["evaluation_id"],
+        "unsupported routes ignore Idempotency-Key instead of deduplicating"
+    );
+
+    let batch_payload = json!({
+        "subjects": [{ "id": "person-1" }],
+        "claims": ["farmed-land-size"],
+        "disclosure": "value"
+    });
+    let first_batch = server
+        .post("/claims/batch-evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "supported-batch-key")
+        .json(&batch_payload)
+        .await;
+    first_batch.assert_status_ok();
+    let first_batch_body: Value = first_batch.json();
+    let replayed_batch = server
+        .post("/claims/batch-evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "supported-batch-key")
+        .json(&batch_payload)
+        .await;
+    replayed_batch.assert_status_ok();
+    let replayed_batch_body: Value = replayed_batch.json();
+    assert_eq!(replayed_batch_body, first_batch_body);
+
+    let conflicting_batch = server
+        .post("/claims/batch-evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "supported-batch-key")
+        .json(&json!({
+            "subjects": [{ "id": "person-2" }],
+            "claims": ["farmed-land-size"],
+            "disclosure": "value"
+        }))
+        .await;
+    conflicting_batch.assert_status(StatusCode::CONFLICT);
+    let conflict_body: Value = conflicting_batch.json();
+    assert_eq!(conflict_body["code"], "idempotency.conflict");
+}
+
+#[tokio::test]
 async fn openapi_contract_matches_representative_live_routes() {
     set_audit_secret();
     std::env::set_var(

@@ -2638,6 +2638,47 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_key_is_advertised_only_for_supported_post_routes() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let supported = ["/claims/batch-evaluate"];
+        let unsupported = [
+            "/admin/reload",
+            "/oid4vci/nonce",
+            "/oid4vci/credential",
+            "/claims/evaluate",
+            "/federation/v1/evaluations",
+            "/evidence/render",
+            "/credentials/issue",
+            "/admin/credentials/status/{credential_id}",
+        ];
+
+        for path in supported {
+            assert!(
+                post_parameters(&doc, path)
+                    .iter()
+                    .any(|parameter| parameter["name"] == "Idempotency-Key"
+                        && parameter["in"] == "header"),
+                "{path} must advertise Idempotency-Key"
+            );
+        }
+        for path in unsupported {
+            assert!(
+                post_parameters(&doc, path)
+                    .iter()
+                    .all(|parameter| parameter["name"] != "Idempotency-Key"),
+                "{path} must not advertise unsupported Idempotency-Key semantics"
+            );
+        }
+    }
+
+    fn post_parameters<'a>(doc: &'a serde_json::Value, path: &str) -> Vec<&'a serde_json::Value> {
+        doc["paths"][path]["post"]["parameters"]
+            .as_array()
+            .map(|parameters| parameters.iter().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
     fn list_claims_documents_bounded_unpaginated_contract() {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         let list_claims = &doc["paths"]["/claims"]["get"];

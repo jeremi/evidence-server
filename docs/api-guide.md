@@ -22,6 +22,24 @@ are mounted or useful only when their feature blocks are enabled.
 Purpose can be supplied by request body or `Data-Purpose` where the route
 supports it. Do not send conflicting purpose values.
 
+`Idempotency-Key` has route-specific semantics. It is honored only by
+`POST /claims/batch-evaluate`, where successful responses are cached for 15
+minutes per caller and route. Reusing the same key with a different request
+returns `409`. Other POST routes ignore the header and do not provide
+idempotent retry protection, so client SDKs should not send it there.
+
+| POST route | `Idempotency-Key` behavior |
+| --- | --- |
+| `/claims/batch-evaluate` | Honored; same key and request returns cached response, different request returns `409` |
+| `/claims/evaluate` | Ignored |
+| `/evidence/render` | Ignored |
+| `/credentials/issue` | Ignored; holder proof replay protection is separate |
+| `/oid4vci/nonce` | Ignored; nonce replay storage is separate |
+| `/oid4vci/credential` | Ignored; proof nonce consumption is separate |
+| `/admin/reload` | Ignored |
+| `/admin/credentials/status/{credential_id}` | Ignored |
+| `/federation/v1/evaluations` | Ignored; signed request replay protection is separate |
+
 ## Auth Expectations
 
 Most API routes require the configured caller auth mode. Public operational
