@@ -15,8 +15,9 @@ use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_notary_core::{
-    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource,
-    StandaloneRegistryNotaryConfig,
+    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, ReplayConfig,
+    ReplayRedisConfig, SelfAttestationClaimSource, StandaloneRegistryNotaryConfig,
+    REPLAY_STORAGE_REDIS,
 };
 use registry_notary_server::{standalone_router, StandaloneServerError};
 use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
@@ -340,6 +341,30 @@ fn set_federation_env() {
         "TEST_FEDERATION_PAIRWISE_SECRET",
         "federation-pairwise-secret",
     );
+}
+
+fn redis_replay_prefix(test_name: &str) -> String {
+    format!(
+        "registry-notary-replay-test:{test_name}:{}:{}",
+        std::process::id(),
+        OffsetDateTime::now_utc().unix_timestamp_nanos()
+    )
+}
+
+fn use_redis_replay(
+    config: &mut StandaloneRegistryNotaryConfig,
+    redis_url_env: &str,
+    key_prefix: &str,
+) {
+    config.replay = ReplayConfig {
+        storage: REPLAY_STORAGE_REDIS.to_string(),
+        redis: ReplayRedisConfig {
+            url_env: redis_url_env.to_string(),
+            key_prefix: key_prefix.to_string(),
+            connect_timeout_ms: 500,
+            operation_timeout_ms: 500,
+        },
+    };
 }
 
 fn federation_config(
@@ -959,6 +984,90 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     assert!(!metrics_body.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!metrics_body.contains("person-1"));
     assert!(!metrics_body.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn federation_replay_rejects_duplicate_jti_across_redis_backed_instances() {
+    let Ok(redis_url) = std::env::var("REGISTRY_NOTARY_REDIS_TEST_URL") else {
+        return;
+    };
+    set_federation_env();
+    std::env::set_var("TEST_REPLAY_REDIS_URL_FEDERATION_SHARED", redis_url);
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let (peer_private, _) = fixtures::ed25519_pair();
+    peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&peer_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let prefix = redis_replay_prefix("federation");
+
+    let audit_a = tmp.path().join("federation-a.jsonl");
+    let mut config_a = federation_config(
+        base_url.trim_end_matches('/'),
+        audit_a.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    use_redis_replay(
+        &mut config_a,
+        "TEST_REPLAY_REDIS_URL_FEDERATION_SHARED",
+        &prefix,
+    );
+    let server_a = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_a).expect("first standalone router builds"));
+
+    let audit_b = tmp.path().join("federation-b.jsonl");
+    let mut config_b = federation_config(
+        base_url.trim_end_matches('/'),
+        audit_b.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    use_redis_replay(
+        &mut config_b,
+        "TEST_REPLAY_REDIS_URL_FEDERATION_SHARED",
+        &prefix,
+    );
+    let server_b = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_b).expect("second standalone router builds"));
+    server_a.get("/ready").await.assert_status_ok();
+    server_b.get("/ready").await.assert_status_ok();
+
+    let token = federation_request_jwt(
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7",
+        "https://purpose.example.test/eligibility",
+    );
+    let accepted = server_a
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(token.clone()))
+        .await;
+    accepted.assert_status_ok();
+
+    let replay = server_b
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(token))
+        .await;
+    replay.assert_status(StatusCode::CONFLICT);
+
+    let metrics_a = server_a.get("/metrics").await.text();
+    assert!(metrics_a.contains(
+        "registry_notary_replay_events_total{flow=\"federation_request\",outcome=\"accepted\"} 1"
+    ));
+    let metrics_b = server_b.get("/metrics").await.text();
+    assert!(metrics_b.contains(
+        "registry_notary_replay_events_total{flow=\"federation_request\",outcome=\"replayed\"} 1"
+    ));
 }
 
 #[tokio::test]
@@ -2130,6 +2239,143 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
 }
 
 #[tokio::test]
+async fn oid4vci_nonce_replay_rejects_cross_instance_consumption_with_redis_replay() {
+    let Ok(redis_url) = std::env::var("REGISTRY_NOTARY_REDIS_TEST_URL") else {
+        return;
+    };
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_REPLAY_REDIS_URL_OID4VCI_SHARED", redis_url);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/datasets/people/person",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let prefix = redis_replay_prefix("oid4vci-nonce");
+
+    let audit_a = tmp.path().join("oid4vci-a.jsonl");
+    let mut config_a = self_attestation_oid4vci_config(
+        base_url.trim_end_matches('/'),
+        audit_a.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    use_redis_replay(
+        &mut config_a,
+        "TEST_REPLAY_REDIS_URL_OID4VCI_SHARED",
+        &prefix,
+    );
+    config_a
+        .self_attestation
+        .allowed_operations
+        .issue_credential = true;
+    config_a
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let server_a = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_a).expect("first standalone router builds"));
+
+    let audit_b = tmp.path().join("oid4vci-b.jsonl");
+    let mut config_b = self_attestation_oid4vci_config(
+        base_url.trim_end_matches('/'),
+        audit_b.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    use_redis_replay(
+        &mut config_b,
+        "TEST_REPLAY_REDIS_URL_OID4VCI_SHARED",
+        &prefix,
+    );
+    config_b
+        .self_attestation
+        .allowed_operations
+        .issue_credential = true;
+    config_b
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let server_b = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_b).expect("second standalone router builds"));
+    server_a.get("/ready").await.assert_status_ok();
+    server_b.get("/ready").await.assert_status_ok();
+
+    let nonce = server_a
+        .post("/oid4vci/nonce")
+        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
+        .await;
+    nonce.assert_status_ok();
+    let nonce_body: Value = nonce.json();
+    let nonce = nonce_body["c_nonce"]
+        .as_str()
+        .expect("nonce is returned")
+        .to_string();
+    let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let consumed_by_b = server_b
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": proof.clone()
+            }
+        }))
+        .await;
+    consumed_by_b.assert_status_ok();
+
+    let replayed_on_a = server_a
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": proof
+            }
+        }))
+        .await;
+    replayed_on_a.assert_status(StatusCode::BAD_REQUEST);
+    let replay_body: Value = replayed_on_a.json();
+    assert_eq!(replay_body["error"], json!("invalid_proof"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -2239,6 +2485,176 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         status_body["credential_profile"],
         json!("civil_status_sd_jwt")
     );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn holder_proof_jti_replay_rejects_cross_instance_issue_with_redis_replay() {
+    let Ok(redis_url) = std::env::var("REGISTRY_NOTARY_REDIS_TEST_URL") else {
+        return;
+    };
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_REPLAY_REDIS_URL_HOLDER_SHARED", redis_url);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/datasets/people/person",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let prefix = redis_replay_prefix("holder-proof");
+
+    let audit_a = tmp.path().join("holder-a.jsonl");
+    let mut config_a = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_a.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    use_redis_replay(
+        &mut config_a,
+        "TEST_REPLAY_REDIS_URL_HOLDER_SHARED",
+        &prefix,
+    );
+    config_a
+        .self_attestation
+        .allowed_operations
+        .issue_credential = true;
+    config_a
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let server_a = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_a).expect("first standalone router builds"));
+
+    let audit_b = tmp.path().join("holder-b.jsonl");
+    let mut config_b = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_b.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    use_redis_replay(
+        &mut config_b,
+        "TEST_REPLAY_REDIS_URL_HOLDER_SHARED",
+        &prefix,
+    );
+    config_b
+        .self_attestation
+        .allowed_operations
+        .issue_credential = true;
+    config_b
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let server_b = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config_b).expect("second standalone router builds"));
+    server_a.get("/ready").await.assert_status_ok();
+    server_b.get("/ready").await.assert_status_ok();
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+    let evaluate_request = json!({
+        "subject": {
+            "id": "person-1",
+            "id_type": "national_id"
+        },
+        "claims": ["person-is-alive"],
+        "disclosure": "value",
+        "format": "application/dc+sd-jwt"
+    });
+    let evaluate_a = server_a
+        .post("/claims/evaluate")
+        .add_header("authorization", authorization.clone())
+        .json(&evaluate_request)
+        .await;
+    evaluate_a.assert_status_ok();
+    let evaluate_a_body: Value = evaluate_a.json();
+    let evaluation_a = evaluate_a_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+    let evaluate_b = server_b
+        .post("/claims/evaluate")
+        .add_header("authorization", authorization.clone())
+        .json(&evaluate_request)
+        .await;
+    evaluate_b.assert_status_ok();
+    let evaluate_b_body: Value = evaluate_b.json();
+    let evaluation_b = evaluate_b_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+
+    let holder_id = holder_did_jwk();
+    let replay_jti = "direct-cross-instance-holder-proof-jti-1";
+    let proof_a = sign_direct_holder_proof(&holder_id, &evaluation_a, replay_jti);
+    let proof_b = sign_direct_holder_proof(&holder_id, &evaluation_b, replay_jti);
+    let issue_a = server_a
+        .post("/credentials/issue")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "evaluation_id": evaluation_a,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "holder": {
+                "binding": "did",
+                "id": holder_id.clone(),
+                "proof": proof_a
+            }
+        }))
+        .await;
+    issue_a.assert_status_ok();
+
+    let replay_b = server_b
+        .post("/credentials/issue")
+        .add_header("authorization", authorization)
+        .json(&json!({
+            "evaluation_id": evaluation_b,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "holder": {
+                "binding": "did",
+                "id": holder_id,
+                "proof": proof_b
+            }
+        }))
+        .await;
+    replay_b.assert_status(StatusCode::CONFLICT);
+    let replay_body: Value = replay_b.json();
+    assert_eq!(replay_body["code"], json!("credential.holder_proof_replay"));
 
     idp.stop().await;
 }
