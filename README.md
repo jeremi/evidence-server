@@ -70,6 +70,9 @@ The server publishes `GET /openapi.json` as the primary SDK-facing HTTP
 contract. Use it for route shapes, media types, error envelopes,
 `Idempotency-Key`, and retry header support. `/metrics` remains a Prometheus
 operational scrape route and is intentionally excluded from OpenAPI.
+`GET /claims` returns the full caller-visible configured claim set. Claim sets
+are intentionally bounded by Registry Notary configuration, so the route has no
+pagination parameters.
 
 ## Federated Evaluation
 

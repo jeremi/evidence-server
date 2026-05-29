@@ -316,8 +316,17 @@ fn build_openapi_document() -> OpenApi {
                 "get": {
                     "summary": "List claims visible to the caller",
                     "operationId": "listClaims",
+                    "description": "Returns the full caller-visible configured claim set. Claim sets are intentionally bounded by Registry Notary configuration, so this route has no pagination parameters.",
+                    "parameters": [],
                     "responses": {
-                        "200": { "description": "Visible claims" },
+                        "200": {
+                            "description": "Full configured visible claim set",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/ListClaimsResponse" }
+                                }
+                            }
+                        },
                         "401": { "description": "Missing or invalid credential" }
                     }
                 }
@@ -559,6 +568,8 @@ fn build_openapi_document() -> OpenApi {
             "schemas": {
                 "ReadinessStatus": readiness_status_schema(),
                 "ProblemDetails": problem_details_schema(),
+                "ListClaimsResponse": list_claims_response_schema(),
+                "ClaimSummary": claim_summary_schema(),
                 "DirectCredentialIssueResponse": direct_credential_issue_response_schema(),
                 "CredentialStatus": credential_status_schema(),
                 "CredentialStatusUpdateRequest": credential_status_update_request_schema(),
@@ -1231,6 +1242,76 @@ fn claim_ref_schema() -> Value {
                 "additionalProperties": false
             }
         ]
+    })
+}
+
+fn list_claims_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "description": "Full caller-visible configured claim set. The set is bounded by Registry Notary configuration and is not paginated.",
+                "items": { "$ref": "#/components/schemas/ClaimSummary" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "title", "version", "subject_type", "operations", "formats", "disclosure"],
+        "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "version": { "type": "string" },
+            "subject_type": { "type": "string" },
+            "operations": {
+                "type": "object",
+                "required": ["evaluate", "batch_evaluate"],
+                "properties": {
+                    "evaluate": { "type": "boolean" },
+                    "batch_evaluate": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            },
+            "formats": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "disclosure": {
+                "type": "object",
+                "required": ["default", "allowed", "downgrade"],
+                "properties": {
+                    "default": { "type": "string" },
+                    "allowed": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "downgrade": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "cccev": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true
+            },
+            "oots": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true
+            },
+            "self_attestation": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": true
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -2379,6 +2460,31 @@ mod tests {
             doc["paths"]["/.well-known/evidence/jwks.json"]["get"]["responses"]["200"]["headers"]
                 ["Cache-Control"]["schema"]["example"],
             json!("public, max-age=600")
+        );
+    }
+
+    #[test]
+    fn list_claims_documents_bounded_unpaginated_contract() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let list_claims = &doc["paths"]["/claims"]["get"];
+
+        assert_eq!(list_claims["parameters"], json!([]));
+        assert_eq!(
+            list_claims["description"],
+            json!("Returns the full caller-visible configured claim set. Claim sets are intentionally bounded by Registry Notary configuration, so this route has no pagination parameters.")
+        );
+        assert_eq!(
+            list_claims["responses"]["200"]["description"],
+            json!("Full configured visible claim set")
+        );
+        assert_eq!(
+            list_claims["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/ListClaimsResponse")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ListClaimsResponse"]["properties"]["data"]
+                ["description"],
+            json!("Full caller-visible configured claim set. The set is bounded by Registry Notary configuration and is not paginated.")
         );
     }
 
