@@ -25,7 +25,7 @@ fn build_openapi_document() -> OpenApi {
         "info": {
             "title": "Registry Notary API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Standalone claim evaluation, rendering, and credential issuance API.",
+            "description": "Standalone claim evaluation, rendering, and credential issuance API. This OpenAPI document is the primary wire contract for SDK implementers. Operational scrape-only routes such as /metrics are intentionally excluded.",
             "license": {
                 "name": env!("CARGO_PKG_LICENSE"),
                 "identifier": env!("CARGO_PKG_LICENSE")
@@ -35,6 +35,9 @@ fn build_openapi_document() -> OpenApi {
             { "apiKeyAuth": [] },
             { "bearerAuth": [] }
         ],
+        "x-registry-notary-excluded-paths": {
+            "/metrics": "Prometheus scrape endpoint with text/plain output. It is an operational route, not an SDK API surface."
+        },
         "paths": {
             "/healthz": {
                 "get": {
@@ -53,9 +56,23 @@ fn build_openapi_document() -> OpenApi {
                     "operationId": "getReady",
                     "security": [],
                     "responses": {
-                        "200": { "description": "Evidence runtime is ready" },
+                        "200": {
+                            "description": "Evidence runtime is ready",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/ReadinessStatus" }
+                                }
+                            }
+                        },
                         "4XX": { "description": "Client error" },
-                        "503": { "description": "Evidence runtime is not ready" }
+                        "503": {
+                            "description": "Evidence runtime is not ready",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/ReadinessStatus" }
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -204,6 +221,9 @@ fn build_openapi_document() -> OpenApi {
                         "404": { "description": "OpenID4VCI nonce endpoint is disabled" },
                         "429": {
                             "description": "Nonce store is rate limited",
+                            "headers": {
+                                "Retry-After": retry_after_header()
+                            },
                             "content": {
                                 "application/json": {
                                     "schema": { "$ref": "#/components/schemas/Oid4vciError" }
@@ -272,6 +292,9 @@ fn build_openapi_document() -> OpenApi {
                         },
                         "429": {
                             "description": "Credential request is rate limited",
+                            "headers": {
+                                "Retry-After": retry_after_header()
+                            },
                             "content": {
                                 "application/json": {
                                     "schema": { "$ref": "#/components/schemas/Oid4vciError" }
@@ -400,6 +423,7 @@ fn build_openapi_document() -> OpenApi {
                             "name": "Idempotency-Key",
                             "in": "header",
                             "required": false,
+                            "description": "Optional idempotency key for safe retry of batch evaluation. Reusing the key with a different request body returns 409.",
                             "schema": { "type": "string" }
                         }
                     ],
@@ -461,7 +485,14 @@ fn build_openapi_document() -> OpenApi {
                         }
                     },
                     "responses": {
-                        "200": { "description": "Issued credential" },
+                        "200": {
+                            "description": "Issued credential",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/DirectCredentialIssueResponse" }
+                                }
+                            }
+                        },
                         "400": { "description": "Invalid request or disclosure widening attempt" },
                         "401": { "description": "Missing or invalid credential" },
                         "404": { "description": "Evaluation not found" },
@@ -526,7 +557,9 @@ fn build_openapi_document() -> OpenApi {
         },
         "components": {
             "schemas": {
+                "ReadinessStatus": readiness_status_schema(),
                 "ProblemDetails": problem_details_schema(),
+                "DirectCredentialIssueResponse": direct_credential_issue_response_schema(),
                 "CredentialStatus": credential_status_schema(),
                 "CredentialStatusUpdateRequest": credential_status_update_request_schema(),
                 "CredentialIssuerMetadata": credential_issuer_metadata_schema(),
@@ -1305,7 +1338,39 @@ fn add_runtime_problem_responses(
             title,
             problem_example(status_code, code, title, detail),
         );
+        if matches!(*status, "429" | "503") {
+            add_response_header(document, path, method, status, "Retry-After");
+        }
     }
+}
+
+fn add_response_header(
+    document: &mut Value,
+    path: &str,
+    method: &str,
+    status: &str,
+    header_name: &str,
+) {
+    let Some(response) = document
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .and_then(|paths| paths.get_mut(path))
+        .and_then(Value::as_object_mut)
+        .and_then(|path_item| path_item.get_mut(method))
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(status))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    let headers = response.entry("headers").or_insert_with(|| json!({}));
+    let Some(headers) = headers.as_object_mut() else {
+        return;
+    };
+    headers.insert(header_name.to_string(), retry_after_header());
 }
 
 fn set_response_example(
@@ -1376,6 +1441,78 @@ fn problem_details_schema() -> Value {
             "code": { "type": "string" }
         },
         "additionalProperties": true
+    })
+}
+
+fn retry_after_header() -> Value {
+    json!({
+        "description": "Optional delay, in seconds or HTTP-date form, before retrying a rate-limited or temporarily unavailable request.",
+        "schema": {
+            "type": "string"
+        }
+    })
+}
+
+fn readiness_status_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["status", "checks"],
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["ready", "not_ready"]
+            },
+            "checks": {
+                "type": "object",
+                "required": ["total", "ok", "failed"],
+                "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "ok": { "type": "integer", "minimum": 0 },
+                    "failed": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn direct_credential_issue_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "credential_id",
+            "credential_profile",
+            "format",
+            "issuer",
+            "expires_at",
+            "credential",
+            "issuer_signed_jwt",
+            "disclosures"
+        ],
+        "properties": {
+            "credential_id": { "type": "string" },
+            "credential_profile": { "type": "string" },
+            "format": {
+                "type": "string",
+                "const": FORMAT_SD_JWT_VC
+            },
+            "issuer": { "type": "string" },
+            "expires_at": { "type": "string", "format": "date-time" },
+            "credential": {
+                "type": "string",
+                "description": "Compact SD-JWT VC with issuer-signed JWT and disclosures."
+            },
+            "issuer_signed_jwt": {
+                "type": "string",
+                "description": "Issuer-signed JWT portion of the SD-JWT VC."
+            },
+            "disclosures": {
+                "type": "array",
+                "items": { "type": "string" }
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -1966,6 +2103,10 @@ mod tests {
         ] {
             assert!(paths.contains_key(route), "missing {route}");
         }
+        assert!(
+            !paths.contains_key("/metrics"),
+            "/metrics is intentionally excluded from SDK OpenAPI paths"
+        );
     }
 
     #[test]
@@ -1976,6 +2117,10 @@ mod tests {
         assert_eq!(
             doc["info"]["license"]["identifier"],
             env!("CARGO_PKG_LICENSE")
+        );
+        assert_eq!(
+            doc["x-registry-notary-excluded-paths"]["/metrics"],
+            json!("Prometheus scrape endpoint with text/plain output. It is an operational route, not an SDK API surface.")
         );
     }
 
@@ -2056,6 +2201,18 @@ mod tests {
             doc["paths"]["/credentials/issue"]["post"]["responses"]["200"]["content"]
                 ["application/json"]["example"]["format"],
             json!("application/dc+sd-jwt")
+        );
+        assert_eq!(
+            doc["paths"]["/ready"]["get"]["responses"]["503"]["content"]["application/json"]
+                ["example"],
+            json!({
+                "status": "not_ready",
+                "checks": {
+                    "total": 1,
+                    "ok": 0,
+                    "failed": 1
+                }
+            })
         );
     }
 
@@ -2147,6 +2304,57 @@ mod tests {
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
             json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 7807 Problem Details.")
+        );
+        assert!(
+            doc["paths"]["/oid4vci/credential"]["post"]["responses"]["400"]["content"]
+                .get("application/problem+json")
+                .is_none()
+        );
+        assert_eq!(
+            doc["paths"]["/oid4vci/credential"]["post"]["responses"]["429"]["headers"]
+                ["Retry-After"]["schema"]["type"],
+            json!("string")
+        );
+    }
+
+    #[test]
+    fn sdk_contract_fields_are_explicit() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        assert_eq!(
+            doc["paths"]["/ready"]["get"]["responses"]["503"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            json!("#/components/schemas/ReadinessStatus")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ReadinessStatus"]["properties"]["status"]["enum"],
+            json!(["ready", "not_ready"])
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/issue"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/DirectCredentialIssueResponse")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["DirectCredentialIssueResponse"]["required"],
+            json!([
+                "credential_id",
+                "credential_profile",
+                "format",
+                "issuer",
+                "expires_at",
+                "credential",
+                "issuer_signed_jwt",
+                "disclosures"
+            ])
+        );
+        assert_eq!(
+            doc["paths"]["/claims/batch-evaluate"]["post"]["parameters"][0]["name"],
+            json!("Idempotency-Key")
+        );
+        assert_eq!(
+            doc["paths"]["/claims/batch-evaluate"]["post"]["responses"]["429"]["headers"]
+                ["Retry-After"]["schema"]["type"],
+            json!("string")
         );
     }
 

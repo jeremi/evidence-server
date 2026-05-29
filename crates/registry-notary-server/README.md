@@ -27,6 +27,14 @@ fn app(config: StandaloneRegistryNotaryConfig) -> Result<axum::Router, Standalon
 }
 ```
 
+## API Contract
+
+`GET /openapi.json` is the primary HTTP contract for SDK implementers. It
+documents SDK-facing JSON and JWT routes, response media types, error
+envelopes, idempotency support, and retry headers. `/metrics` is intentionally
+excluded because it is a Prometheus operational scrape route, not an SDK API
+surface.
+
 ## Features
 
 - Default: `registry-notary-cel`.

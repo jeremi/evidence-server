@@ -2826,6 +2826,109 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 }
 
 #[tokio::test]
+async fn openapi_contract_matches_representative_live_routes() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let openapi = server
+        .get("/openapi.json")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await;
+    openapi.assert_status_ok();
+    let openapi_body: Value = openapi.json();
+
+    let ready = server.get("/ready").await;
+    ready.assert_status_ok();
+    let ready_body: Value = ready.json();
+    assert_eq!(
+        ready_body,
+        openapi_body["paths"]["/ready"]["get"]["responses"]["200"]["content"]["application/json"]
+            ["example"]
+    );
+    assert_eq!(
+        openapi_body["paths"]["/ready"]["get"]["responses"]["503"]["content"]["application/json"]
+            ["schema"]["$ref"],
+        json!("#/components/schemas/ReadinessStatus")
+    );
+
+    let oid4vci_error = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", "Bearer invalid-token")
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": "not-a-compact-jwt"
+            }
+        }))
+        .await;
+    oid4vci_error.assert_status(StatusCode::BAD_REQUEST);
+    let content_type = oid4vci_error
+        .headers()
+        .get("content-type")
+        .expect("OID4VCI error content-type")
+        .to_str()
+        .expect("OID4VCI error content-type is valid");
+    assert!(content_type.starts_with("application/json"));
+    let error_body: Value = oid4vci_error.json();
+    assert_eq!(error_body["error"], json!("invalid_proof"));
+    assert!(error_body.get("code").is_none());
+    assert_eq!(
+        openapi_body["paths"]["/oid4vci/credential"]["post"]["responses"]["400"]["content"]
+            ["application/json"]["schema"]["$ref"],
+        json!("#/components/schemas/Oid4vciError")
+    );
+    assert!(
+        openapi_body["paths"]["/oid4vci/credential"]["post"]["responses"]["400"]["content"]
+            .get("application/problem+json")
+            .is_none()
+    );
+
+    let metrics = server.get("/metrics").await;
+    metrics.assert_status_ok();
+    assert!(
+        openapi_body["paths"].get("/metrics").is_none(),
+        "/metrics must stay out of the SDK OpenAPI paths"
+    );
+    assert_eq!(
+        openapi_body["x-registry-notary-excluded-paths"]["/metrics"],
+        json!("Prometheus scrape endpoint with text/plain output. It is an operational route, not an SDK API surface.")
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn audit_chain_bootstraps_from_sink_tail() {
     set_audit_secret();
     std::env::set_var(

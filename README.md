@@ -64,6 +64,13 @@ self-attestation token policy ceiling. The supported wire contract and explicit
 non-support list are defined in
 [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
 
+## API Contract
+
+The server publishes `GET /openapi.json` as the primary SDK-facing HTTP
+contract. Use it for route shapes, media types, error envelopes,
+`Idempotency-Key`, and retry header support. `/metrics` remains a Prometheus
+operational scrape route and is intentionally excluded from OpenAPI.
+
 ## Federated Evaluation
 
 Registry Notary includes a first federation slice for static-peer delegated
