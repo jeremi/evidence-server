@@ -1269,6 +1269,8 @@ fn claim_summary_schema() -> Value {
             "title": { "type": "string" },
             "version": { "type": "string" },
             "subject_type": { "type": "string" },
+            "evidence_type": { "type": "string" },
+            "evidence_type_iri": { "type": "string" },
             "operations": {
                 "type": "object",
                 "required": ["evaluate", "batch_evaluate"],
@@ -2485,6 +2487,14 @@ mod tests {
             doc["components"]["schemas"]["ListClaimsResponse"]["properties"]["data"]
                 ["description"],
             json!("Full caller-visible configured claim set. The set is bounded by Registry Notary configuration and is not paginated.")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimSummary"]["properties"]["evidence_type"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimSummary"]["properties"]["evidence_type_iri"]["type"],
+            json!("string")
         );
     }
 
