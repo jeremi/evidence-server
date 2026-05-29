@@ -28,6 +28,8 @@ from specs.
   bindings, rules, disclosure, dependencies, and batch behavior.
 - [API guide](api-guide.md): call discovery, evaluation, rendering, credential,
   OID4VCI, status, health, and federation endpoints.
+- [Extension boundaries](extension-boundaries.md): where integrations should
+  fetch, transform, sign, or only consume credentials.
 - [Source connectors guide](source-connectors-guide.md): connect Registry Data
   API, DCI, OAuth2 source auth, and bulk source reads.
 - [Client SDK guide](client-sdk-guide.md): use the Rust client and Python and
