@@ -53,6 +53,9 @@ not import or link Registry Relay code.
   scenario catalog for where Notary helps, who is involved, current support
   status, and the gaps surfaced by local evaluation, federation, proof, issuance,
   and audit workflows.
+- [`docs/extension-boundaries.md`](docs/extension-boundaries.md):
+  architecture note for source, transformation, issuance, and consumer
+  extension boundaries.
 
 ## Credential Conformance
 
