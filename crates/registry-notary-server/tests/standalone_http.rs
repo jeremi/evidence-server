@@ -1780,6 +1780,41 @@ async fn service_document_advertises_credential_status_when_enabled() {
 }
 
 #[tokio::test]
+async fn issuer_jwks_sets_cache_headers() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("x-api-key", "api-token")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("public, max-age=600")
+    );
+    let body: Value = response.json();
+    assert!(body["keys"].is_array());
+}
+
+#[tokio::test]
 async fn credential_status_admin_edges_return_expected_http_statuses() {
     set_audit_secret();
     std::env::set_var(

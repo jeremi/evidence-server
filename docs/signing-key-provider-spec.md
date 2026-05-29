@@ -345,8 +345,9 @@ Rules:
   accepted clock skew.
 - JWKS output must de-duplicate by `kid` and publish active plus publish-only
   keys exactly once, independent of how many profiles reference a key.
-- JWKS responses should set cache headers that are shorter than the planned key
-  rotation overlap.
+- JWKS responses set `Cache-Control: public, max-age=600`; planned key rotation
+  overlap must be longer than that TTL and at least the maximum credential
+  lifetime plus accepted clock skew.
 
 Profile/key binding must also be validated. When a profile uses an HTTPS
 issuer and the referenced key has a `did:web` `kid`, require the DID authority
