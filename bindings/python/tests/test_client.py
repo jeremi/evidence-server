@@ -12,6 +12,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from registry_notary import RegistryNotaryClient, RetryPolicy
+from registry_notary.client import _parse_retry_after
 from registry_notary.errors import NotaryError, NotaryProblemError
 
 
@@ -354,6 +355,16 @@ class RegistryNotaryClientTests(unittest.TestCase):
                 client.evaluate(subject_id="subj-1", id_type="NATIONAL_ID", claims=["age"])
 
         self.assertEqual(len(recorder.requests), 1)
+
+    def test_http_date_retry_after_uses_server_date_header(self) -> None:
+        delay = _parse_retry_after(
+            {
+                "date": "Wed, 31 Dec 2099 00:00:00 GMT",
+                "retry-after": "Wed, 31 Dec 2099 00:00:02 GMT",
+            }
+        )
+
+        self.assertEqual(delay, 2.0)
 
     def test_discovery_jwks_oid4vci_and_federation_helpers(self) -> None:
         recorder = _Recorder(

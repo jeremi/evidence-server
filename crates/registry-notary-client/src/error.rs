@@ -13,6 +13,8 @@ pub enum NotaryClientBuildError {
     MultipleAuthModes,
     #[error("request purpose conflicts with request body purpose")]
     PurposeConflict,
+    #[error("request body could not be serialized")]
+    RequestSerialization,
     #[error("idempotency key is not supported for this route")]
     UnsupportedIdempotencyKey,
 }
@@ -231,6 +233,9 @@ impl NotaryClientError {
                         NotaryClientBuildError::InsecureBaseUrl => "build.insecure_base_url",
                         NotaryClientBuildError::MultipleAuthModes => "build.multiple_auth_modes",
                         NotaryClientBuildError::PurposeConflict => "request.purpose_conflict",
+                        NotaryClientBuildError::RequestSerialization => {
+                            "request.serialization_failed"
+                        }
                         NotaryClientBuildError::UnsupportedIdempotencyKey => {
                             "request.unsupported_idempotency_key"
                         }

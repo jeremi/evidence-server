@@ -645,6 +645,14 @@ async function parseTextResponse(response) {
  * @param {string | undefined} requestId
  */
 async function readBoundedText(response, requestId) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsed = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(parsed) && parsed > MAX_RESPONSE_BYTES) {
+      throw bodyTooLargeError(response.status, requestId);
+    }
+  }
+
   if (response.body === null || typeof response.body.getReader !== "function") {
     const text = await response.text();
     if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
@@ -788,7 +796,10 @@ function retryDelayMs(policy, attempt, response = undefined) {
   if (retryAfter !== null && retryAfter !== undefined) {
     const parsed = Date.parse(retryAfter);
     if (Number.isFinite(parsed)) {
-      return Math.min(Math.max(0, parsed - Date.now()), policy.maxDelayMs);
+      const serverDate = response === undefined ? undefined : response.headers.get("date");
+      const parsedServerDate = serverDate === null || serverDate === undefined ? NaN : Date.parse(serverDate);
+      const referenceNow = Number.isFinite(parsedServerDate) ? parsedServerDate : Date.now();
+      return Math.min(Math.max(0, parsed - referenceNow), policy.maxDelayMs);
     }
   }
   return Math.min(policy.baseDelayMs * 2 ** Math.max(0, attempt - 1), policy.maxDelayMs);
@@ -821,11 +832,22 @@ async function sleep(delayMs, signal) {
     throw new NotaryTransportError({ kind: "abort", code: "aborted", retryable: false });
   }
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(resolve, delayMs);
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timeout;
+    const cleanup = () => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      signal?.removeEventListener("abort", onAbort);
+    };
     const onAbort = () => {
-      clearTimeout(timeout);
+      cleanup();
       reject(new NotaryTransportError({ kind: "abort", code: "aborted", retryable: false }));
     };
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve(undefined);
+    }, delayMs);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

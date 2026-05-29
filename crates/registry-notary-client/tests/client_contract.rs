@@ -45,6 +45,19 @@ async fn builder_rejects_non_loopback_http() {
 }
 
 #[tokio::test]
+async fn builder_preserves_encoded_base_path_when_adding_trailing_slash() {
+    let app = Router::new().fallback(get(base_path_health_handler));
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(format!("{base}/tenant%20one"))
+        .build()
+        .expect("client builds");
+
+    let response = client.health().await.expect("health response");
+
+    assert_eq!(response.body.status, "ok");
+}
+
+#[tokio::test]
 async fn debug_redacts_auth_material() {
     let builder = RegistryNotaryClient::builder("https://notary.example")
         .bearer_token("super-secret-token")
@@ -88,6 +101,16 @@ fn credential_issue_response_debug_redacts_credential_material() {
     assert!(wrapped_debug.contains("<redacted>"));
     assert!(!wrapped_debug.contains("issuer.jwt"));
     assert!(!wrapped_debug.contains("disclosure-secret"));
+}
+
+#[test]
+fn serialization_build_error_has_specific_portable_code() {
+    let error = NotaryClientError::Build(NotaryClientBuildError::RequestSerialization);
+
+    assert_eq!(
+        error.portable().code.as_deref(),
+        Some("request.serialization_failed")
+    );
 }
 
 #[test]
@@ -810,6 +833,11 @@ async fn evaluate_handler(headers: HeaderMap, body: Bytes) -> Response {
 
 async fn health_handler() -> Response {
     Json(json!({ "status": "ok", "checks": {} })).into_response()
+}
+
+async fn base_path_health_handler(uri: Uri) -> Response {
+    assert_eq!(uri.path(), "/tenant%20one/healthz");
+    health_handler().await
 }
 
 async fn admin_reload_handler(headers: HeaderMap) -> Response {

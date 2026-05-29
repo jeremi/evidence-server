@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import email.utils
 import json
 import socket
@@ -751,7 +752,7 @@ def _problem_error_from_response(
         title=title,
         retryable=retryable,
         request_id=request_id,
-        retry_after=_parse_retry_after(_header(response.headers, "retry-after")),
+        retry_after=_parse_retry_after(response.headers),
     )
 
 
@@ -800,14 +801,15 @@ def _should_retry(policy: RetryPolicy, error: NotaryError) -> bool:
     return False
 
 
-def _retry_delay(policy: RetryPolicy, attempt: int, retry_after: float | str | None) -> float:
+def _retry_delay(policy: RetryPolicy, attempt: int, retry_after: float | None) -> float:
     if isinstance(retry_after, (int, float)):
         return min(float(retry_after), policy.max_delay)
     delay = policy.base_delay * (2 ** max(0, attempt - 1))
     return min(delay, policy.max_delay)
 
 
-def _parse_retry_after(value: str | None) -> float | str | None:
+def _parse_retry_after(headers: Mapping[str, str]) -> float | None:
+    value = _header(headers, "retry-after")
     if value is None:
         return None
     stripped = value.strip()
@@ -817,7 +819,23 @@ def _parse_retry_after(value: str | None) -> float | str | None:
         parsed = email.utils.parsedate_to_datetime(stripped)
     except (TypeError, ValueError):
         return None
-    return stripped if parsed is not None else None
+    if parsed is None:
+        return None
+
+    ref_value = _header(headers, "date")
+    ref_parsed = None
+    if ref_value:
+        try:
+            ref_parsed = email.utils.parsedate_to_datetime(ref_value.strip())
+        except (TypeError, ValueError):
+            ref_parsed = None
+
+    ref_dt = ref_parsed or datetime.datetime.now(datetime.timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    if ref_dt.tzinfo is None:
+        ref_dt = ref_dt.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, (parsed - ref_dt).total_seconds())
 
 
 def _find_jwk(jwks: Mapping[str, Any], kid: str) -> dict[str, Any] | None:

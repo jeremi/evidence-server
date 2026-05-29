@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Typed Registry Notary HTTP client.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use registry_notary_core::{
@@ -13,7 +13,6 @@ use reqwest::{Method, StatusCode, Url};
 use secrecy::SecretString;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::sync::Mutex;
 
 use crate::auth::{Auth, AuthHeader, AuthProvider};
 use crate::error::{
@@ -175,14 +174,19 @@ impl RegistryNotaryClient {
         options: RequestOptions,
     ) -> Result<NotaryResponse<serde_json::Value>, NotaryClientError> {
         if options.is_empty() {
-            if let Some(cached) = self.jwks_cache.lock().await.as_ref() {
-                if cached.expires_at > Instant::now() {
-                    return Ok(NotaryResponse {
-                        body: cached.body.clone(),
-                        request_id: None,
-                        retry_after: None,
-                    });
-                }
+            let cached = self
+                .jwks_cache
+                .lock()
+                .expect("jwks cache lock poisoned")
+                .as_ref()
+                .filter(|cached| cached.expires_at > Instant::now())
+                .map(|cached| cached.body.clone());
+            if let Some(body) = cached {
+                return Ok(NotaryResponse {
+                    body,
+                    request_id: None,
+                    retry_after: None,
+                });
             }
         }
         self.fetch_issuer_jwks(options).await
@@ -247,7 +251,7 @@ impl RegistryNotaryClient {
             body: response.body.clone(),
             expires_at: Instant::now() + JWKS_TTL,
         };
-        *self.jwks_cache.lock().await = Some(cached);
+        *self.jwks_cache.lock().expect("jwks cache lock poisoned") = Some(cached);
         Ok(response)
     }
 
@@ -603,7 +607,8 @@ impl RegistryNotaryClient {
         options.accept = options
             .accept
             .or_else(|| Some(headers::APPLICATION_JSON.to_string()));
-        let raw = serde_json::to_vec(body).map_err(|_| NotaryClientBuildError::PurposeConflict)?;
+        let raw =
+            serde_json::to_vec(body).map_err(|_| NotaryClientBuildError::RequestSerialization)?;
         let response = self
             .execute(
                 Method::POST,
@@ -860,7 +865,10 @@ impl NotaryClientBuilder {
         let mut base_url =
             Url::parse(&base_url).map_err(|err| NotaryClientBuildError::Url(err.to_string()))?;
         if !base_url.path().ends_with('/') {
-            base_url.set_path(&format!("{}/", base_url.path()));
+            base_url
+                .path_segments_mut()
+                .map_err(|_| NotaryClientBuildError::Url("base URL cannot be a base".to_string()))?
+                .push("");
         }
         validate_base_url(&base_url)?;
         let auth_count = usize::from(self.bearer_token.is_some())

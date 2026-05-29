@@ -284,6 +284,32 @@ test("decode and oversized response errors are redacted", async () => {
     assert.equal(error.requestId, "req-large");
     return true;
   });
+
+  let textRead = false;
+  const fallbackOversizedClient = new RegistryNotaryClient({
+    baseUrl: "https://notary.example",
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        "content-length": String(8 * 1024 * 1024 + 1),
+        "x-request-id": "req-large-header",
+      }),
+      body: null,
+      text: async () => {
+        textRead = true;
+        return "{}";
+      },
+    }),
+  });
+
+  await assert.rejects(fallbackOversizedClient.listClaims(), (error) => {
+    assert.ok(error instanceof NotaryProblemError);
+    assert.equal(error.kind, "body_too_large");
+    assert.equal(error.requestId, "req-large-header");
+    return true;
+  });
+  assert.equal(textRead, false);
 });
 
 test("purpose conflicts fail before sending", async () => {
@@ -375,6 +401,83 @@ test("retry policy retries GET and idempotent batch only", async () => {
     (error) => error instanceof NotaryProblemError && error.status === 503,
   );
   assert.equal(evaluateCalls.length, 1);
+});
+
+test("HTTP-date Retry-After uses server Date header", async () => {
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("Wed, 31 Dec 2098 00:00:00 GMT");
+  try {
+    const calls = [];
+    const client = new RegistryNotaryClient({
+      baseUrl: "https://notary.example",
+      retryPolicy: {
+        maxAttempts: 2,
+        baseDelayMs: 1000,
+        maxDelayMs: 1000,
+        retryUnavailable: true,
+      },
+      fetch: async () => {
+        calls.push({});
+        if (calls.length === 1) {
+          return jsonResponse(
+            { code: "busy", title: "Busy" },
+            {
+              status: 503,
+              headers: {
+                date: "Wed, 31 Dec 2099 00:00:00 GMT",
+                "retry-after": "Wed, 31 Dec 2099 00:00:00 GMT",
+              },
+            },
+          );
+        }
+        return jsonResponse({ data: [{ id: "age" }] });
+      },
+    });
+
+    const started = performance.now();
+    assert.deepEqual(await client.listClaims(), { data: [{ id: "age" }] });
+
+    assert.equal(calls.length, 2);
+    assert.equal(performance.now() - started < 100, true);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("retry sleep removes abort listener after timeout", async () => {
+  const calls = [];
+  let addedListener;
+  let removedListener;
+  const signal = {
+    aborted: false,
+    addEventListener: (_event, listener) => {
+      addedListener = listener;
+    },
+    removeEventListener: (_event, listener) => {
+      removedListener = listener;
+    },
+  };
+  const client = new RegistryNotaryClient({
+    baseUrl: "https://notary.example",
+    retryPolicy: {
+      maxAttempts: 2,
+      baseDelayMs: 50,
+      maxDelayMs: 1,
+      retryUnavailable: true,
+    },
+    fetch: async () => {
+      calls.push({});
+      if (calls.length === 1) {
+        return jsonResponse({ code: "busy", title: "Busy" }, { status: 503, headers: { "retry-after": "1" } });
+      }
+      return jsonResponse({ data: [{ id: "age" }] });
+    },
+  });
+
+  assert.deepEqual(await client.listClaims({ signal }), { data: [{ id: "age" }] });
+  assert.equal(calls.length, 2);
+  assert.equal(typeof addedListener, "function");
+  assert.equal(removedListener, addedListener);
 });
 
 test("JWKS helpers cache, refresh, and force refresh on unknown kid", async () => {
