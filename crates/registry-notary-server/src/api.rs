@@ -834,8 +834,8 @@ async fn oid4vci_credential(
                 return oid4vci_error_response(Oid4vciWireError::InvalidProof);
             }
             Err(_) => {
-                state.metrics.record_replay("oid4vci_nonce", "error");
-                return oid4vci_error_response(Oid4vciWireError::ServerError);
+                state.metrics.record_replay("oid4vci_nonce", "invalid");
+                return oid4vci_error_response(Oid4vciWireError::InvalidProof);
             }
         }
     }
