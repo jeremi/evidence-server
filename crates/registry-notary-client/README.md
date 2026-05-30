@@ -39,7 +39,8 @@ if let Some(result) = response.body.first_result() {
 - `RegistryNotaryClient::builder(base_url)` creates a client.
 - `evaluate(subject_id)` starts the ergonomic evaluation builder.
 - `evaluate_request`, `batch_evaluate_request`, `render_request`, and
-  `issue_credential_request` accept core wire request types.
+  `issue_credential_request` accept core wire request types. `render_request`
+  extracts `evaluation_id` into the route path before sending the body.
 - `health`, `ready`, `admin_reload`, `openapi_json`, `metrics`, `list_claims`,
   `get_claim`, and `list_formats` cover operational, discovery, claim catalog,
   and format routes.
