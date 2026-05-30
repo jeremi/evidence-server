@@ -266,12 +266,14 @@ fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/oid4vci/credential"
-            | "/formats"
-            | "/evidence/render"
-            | "/credentials/issue"
-    ) || path == "/claims"
-        || path.starts_with("/claims/")
-        || path.starts_with("/credentials/status/")
+            | "/v1/formats"
+            | "/v1/evaluations"
+            | "/v1/batch-evaluations"
+            | "/v1/credentials"
+    ) || path == "/v1/claims"
+        || path.starts_with("/v1/claims/")
+        || path.starts_with("/v1/evaluations/")
+        || path.starts_with("/v1/credentials/")
 }
 
 fn apply_self_attestation_wallet_cors_headers(
@@ -1988,7 +1990,7 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
-    ) || path.starts_with("/credentials/status/")
+    ) || path.starts_with("/v1/credentials/")
 }
 
 async fn admin_metrics_handler(
@@ -3254,9 +3256,12 @@ fn registry_data_api_url(
     httputil_url::append_path_segments(
         &base,
         &[
+            "v1",
             "datasets",
             binding.dataset.as_str(),
+            "entities",
             binding.entity.as_str(),
+            "records",
         ],
     )
     .map_err(|_| EvidenceError::SourceUnavailable)
@@ -3625,7 +3630,7 @@ mod tests {
             principal_id_hash: Some(Hashed::from_hash("sha256:caseworker")),
             decision: "allowed".to_string(),
             method: "GET".to_string(),
-            path: "/claims".to_string(),
+            path: "/v1/claims".to_string(),
             status: 200,
             verification_id: None,
             claim_hash: None,
@@ -4089,7 +4094,7 @@ credential_profiles:
             Some(&principal),
             &AuditKeyHasher::unkeyed_dev_only(),
             "POST",
-            "/claims/evaluate",
+            "/v1/evaluations",
             BoundedCorrelationId::new("req-123").expect("test correlation id is bounded"),
             &response,
         );
@@ -4648,7 +4653,7 @@ sources:
             self_attestation_rate_keys: None,
         };
         let request = Request::builder()
-            .uri("/claims")
+            .uri("/v1/claims")
             .header(header::AUTHORIZATION, "BEARER api-token")
             .body(Body::empty())
             .expect("request builds");
@@ -5053,7 +5058,7 @@ sources:
 
         assert_eq!(
             url.as_str(),
-            "https://registry.example.test/api/datasets/farmer%2Fregistry/farmer%3Factive"
+            "https://registry.example.test/api/v1/datasets/farmer%2Fregistry/entities/farmer%3Factive/records"
         );
     }
 
@@ -5107,7 +5112,7 @@ sources:
         std::env::set_var("TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN", "source-token");
         let app = Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(|| async { Redirect::temporary("/redirect-target") }),
             )
             .route(

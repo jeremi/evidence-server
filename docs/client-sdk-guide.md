@@ -239,6 +239,12 @@ options. `raw_issuer_jwks` bypasses that cache.
 
 ### Render And Credential Issuance
 
+The render route carries `evaluation_id` in the path. Rust accepts the core
+`RenderRequest` DTO and moves `evaluation_id` into
+`/v1/evaluations/{evaluation_id}/render` before sending the body. Python and
+Node raw helpers accept canonical snake_case JSON, require a mapping/object,
+extract `evaluation_id`, and send the remaining fields as the route body.
+
 ```rust
 use registry_notary_core::{CredentialIssueRequest, RenderRequest};
 
@@ -410,6 +416,25 @@ result = client.batch_evaluate_request(
 )
 ```
 
+### Render And Credential Issuance
+
+Raw render requests use canonical snake_case JSON and must include
+`evaluation_id`. The Python wrapper rejects non-mapping inputs before it reads
+or sends any fields.
+
+```python
+rendered = client.render_request({
+    "evaluation_id": "eval-1",
+    "format": "application/vnd.registry-notary.claim-result+json",
+    "disclosure": "predicate",
+})
+
+credential = client.issue_credential_request({
+    "evaluation_id": "eval-1",
+    "credential_profile": "person_is_alive_sd_jwt",
+})
+```
+
 ### Discovery, Status, OID4VCI, Federation
 
 ```python
@@ -486,6 +511,18 @@ const result = await client.evaluateRequest({
   subject: { id: "person-1", id_type: "national_id" },
   claims: ["person-is-alive"],
   purpose: "benefits_eligibility",
+});
+```
+
+Render uses the route-shaped API. `renderRequest` requires a plain request
+object with snake_case `evaluation_id`, removes `evaluation_id` from the JSON
+body, and posts the rest to `/v1/evaluations/{evaluation_id}/render`.
+
+```js
+const rendered = await client.renderRequest({
+  evaluation_id: "eval-1",
+  format: "application/vnd.registry-notary.claim-result+json",
+  disclosure: "predicate",
 });
 ```
 

@@ -935,9 +935,9 @@ async fn fetch_oauth_token_for_doctor(
         Ok(validated) => validated,
         Err(err) => {
             return Err(Diagnostic::fail(
-                    format!("{connection_id} OAuth token_url is blocked by fetch policy: {err}"),
-                    "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
-                ));
+                format!("{connection_id} OAuth token_url is blocked by fetch policy: {err}"),
+                "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
+            ));
         }
     };
     let client_id = match std::env::var(&auth.client_id_env) {
@@ -1060,9 +1060,9 @@ async fn dci_record_probe(
         Ok(validated) => validated,
         Err(err) => {
             return Diagnostic::fail(
-                    format!("{connection_id} DCI search URL is blocked by fetch policy: {err}"),
-                    "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
-                );
+                format!("{connection_id} DCI search URL is blocked by fetch policy: {err}"),
+                "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
+            );
         }
     };
     let body = match dci_probe_body(&dci, binding, subject_id, subject_id_type) {
