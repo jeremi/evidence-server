@@ -184,7 +184,7 @@ credential status mutation, require `registry_notary:admin`.
   `sub`.
 
 For citizen self-attestation, the OIDC token must also carry a binding claim
-that can be compared exactly to the requested target or requester path.
+that Registry Notary uses to derive the requester and target context.
 
 ## Source Connections
 

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use registry_notary_core::{
-    Bounded, EvidenceError, Hashed, HolderIdentifier, PrincipalIdentifier,
+    Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier, PrincipalIdentifier,
     SelfAttestationDenialCode, SelfAttestationRateLimitsConfig, SubjectBinding,
 };
 use registry_platform_audit::AuditKeyHasher;
@@ -163,6 +163,25 @@ impl SelfAttestationRateLimitKeys {
             "registry-notary:subject-ref:{}:{id_type}:{}:{subject_ref}",
             id_type.len(),
             subject_ref.len()
+        ));
+        ensure_bounded(&hashed)?;
+        Ok(Hashed::from_hash(hashed))
+    }
+
+    pub fn audit_pseudonym_ref(
+        &self,
+        class: &str,
+        canonical_input: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<EvidenceEntityReference>> {
+        if class.is_empty() || canonical_input.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "audit pseudonym input is empty".to_string(),
+            });
+        }
+        let hashed = self.hasher.hash(&format!(
+            "registry-notary:audit-pseudonym:v1:{}:{class}:{}:{canonical_input}",
+            class.len(),
+            canonical_input.len()
         ));
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
@@ -625,6 +644,26 @@ mod tests {
         assert_ne!(
             first, second,
             "id_type and subject_ref must be encoded unambiguously before hashing"
+        );
+    }
+
+    #[test]
+    fn audit_pseudonym_ref_uses_separate_domain_from_subject_ref() {
+        let key_builder = keys();
+        let subject_ref = key_builder
+            .subject_ref("national_id", "rnref:v1:target")
+            .expect("subject ref hashes");
+        let audit_ref = key_builder
+            .audit_pseudonym_ref(
+                "matched-reference-v1",
+                r#"{"class":"matched-reference-v1","handle":"rnref:v1:target"}"#,
+            )
+            .expect("audit pseudonym hashes");
+
+        assert_ne!(
+            subject_ref.as_str(),
+            audit_ref.as_str(),
+            "audit pseudonyms must not be interchangeable with legacy subject refs"
         );
     }
 

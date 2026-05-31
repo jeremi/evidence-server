@@ -1303,7 +1303,7 @@ impl<'a> EvaluateBuilder<'a> {
     pub async fn send(self) -> Result<NotaryResponse<Evaluation>, NotaryClientError> {
         let request = EvaluateRequest {
             requester: self.requester,
-            target: self.target,
+            target: Some(self.target),
             relationship: self.relationship,
             on_behalf_of: self.on_behalf_of,
             claims: self.claims,

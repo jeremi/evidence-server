@@ -315,13 +315,13 @@ async fn parallel_sibling_claims_overlap_in_one_subject() {
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
         requester: None,
-        target: EvidenceEntity::from_subject_request(
+        target: Some(EvidenceEntity::from_subject_request(
             "Person",
             SubjectRequest {
                 id: "p-1".to_string(),
                 id_type: None,
             },
-        ),
+        )),
         relationship: None,
         on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-a"), ClaimRef::from("claim-b")],
@@ -369,13 +369,13 @@ async fn dependent_claim_b_starts_after_a_completes() {
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
         requester: None,
-        target: EvidenceEntity::from_subject_request(
+        target: Some(EvidenceEntity::from_subject_request(
             "Person",
             SubjectRequest {
                 id: "p-1".to_string(),
                 id_type: None,
             },
-        ),
+        )),
         relationship: None,
         on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-b")],
@@ -739,13 +739,13 @@ async fn parallel_bindings_in_one_claim_overlap() {
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
         requester: None,
-        target: EvidenceEntity::from_subject_request(
+        target: Some(EvidenceEntity::from_subject_request(
             "Person",
             SubjectRequest {
                 id: "p-1".to_string(),
                 id_type: None,
             },
-        ),
+        )),
         relationship: None,
         on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-mixed")],
@@ -795,13 +795,13 @@ async fn kill_switch_bindings_one_serializes_within_claim() {
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
         requester: None,
-        target: EvidenceEntity::from_subject_request(
+        target: Some(EvidenceEntity::from_subject_request(
             "Person",
             SubjectRequest {
                 id: "p-1".to_string(),
                 id_type: None,
             },
-        ),
+        )),
         relationship: None,
         on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-mixed")],

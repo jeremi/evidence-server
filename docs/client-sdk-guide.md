@@ -507,6 +507,16 @@ result = client.evaluate_request({
 })
 ```
 
+For citizen self-attestation, omit identity fields and let the server derive the
+requester, target, and `self` relationship from the verified token binding:
+
+```python
+result = client.evaluate_request({
+    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
+    "disclosure": "predicate",
+})
+```
+
 Claim references may be plain strings or pinned objects with `id` and
 `version`. The same versioned claim reference shape is supported for single
 evaluation and batch evaluation.

@@ -448,13 +448,13 @@ async fn purpose_conflict_fails_client_side() {
         .evaluate_request(
             registry_notary_core::EvaluateRequest {
                 requester: None,
-                target: registry_notary_core::EvidenceEntity::from_subject_request(
+                target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
                     "Person",
                     registry_notary_core::SubjectRequest {
                         id: "subject-1".to_string(),
                         id_type: None,
                     },
-                ),
+                )),
                 relationship: None,
                 on_behalf_of: None,
                 claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
@@ -486,13 +486,13 @@ async fn raw_evaluate_preserves_body_only_purpose() {
         .evaluate_request(
             registry_notary_core::EvaluateRequest {
                 requester: None,
-                target: registry_notary_core::EvidenceEntity::from_subject_request(
+                target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
                     "Person",
                     registry_notary_core::SubjectRequest {
                         id: "subject-1".to_string(),
                         id_type: None,
                     },
-                ),
+                )),
                 relationship: None,
                 on_behalf_of: None,
                 claims: vec![registry_notary_core::ClaimRef::new("claim-a")],

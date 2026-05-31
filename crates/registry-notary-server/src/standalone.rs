@@ -4748,13 +4748,13 @@ sources:
                 &principal,
                 EvaluateRequest {
                     requester: None,
-                    target: registry_notary_core::EvidenceEntity::from_subject_request(
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
                         "Person",
                         SubjectRequest {
                             id: "person-123".to_string(),
                             id_type: None,
                         },
-                    ),
+                    )),
                     relationship: None,
                     on_behalf_of: None,
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
@@ -4811,13 +4811,13 @@ sources:
                 &principal,
                 EvaluateRequest {
                     requester: None,
-                    target: registry_notary_core::EvidenceEntity::from_subject_request(
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
                         "Person",
                         SubjectRequest {
                             id: "retry-sentinel".to_string(),
                             id_type: None,
                         },
-                    ),
+                    )),
                     relationship: None,
                     on_behalf_of: None,
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],

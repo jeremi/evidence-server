@@ -580,7 +580,8 @@ impl<'de> Deserialize<'de> for ClaimRef {
 pub struct EvaluateRequest {
     #[serde(default)]
     pub requester: Option<EvidenceEntity>,
-    pub target: EvidenceEntity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EvidenceEntity>,
     #[serde(default)]
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default)]
@@ -597,17 +598,19 @@ pub struct EvaluateRequest {
 impl EvaluateRequest {
     #[must_use]
     pub fn target_subject(&self) -> Option<SubjectRequest> {
-        self.target.to_subject_request()
+        self.target
+            .as_ref()
+            .and_then(EvidenceEntity::to_subject_request)
     }
 
     #[must_use]
-    pub fn request_context(&self) -> EvidenceRequestContext {
-        EvidenceRequestContext {
+    pub fn request_context(&self) -> Option<EvidenceRequestContext> {
+        self.target.as_ref().map(|target| EvidenceRequestContext {
             requester: self.requester.clone(),
-            target: self.target.clone(),
+            target: target.clone(),
             relationship: self.relationship.clone(),
             on_behalf_of: self.on_behalf_of.clone(),
-        }
+        })
     }
 }
 
@@ -1389,7 +1392,8 @@ mod tests {
         }))
         .expect("new request shape deserializes");
 
-        assert_eq!(request.target.entity_type, "person");
+        let target = request.target.as_ref().expect("target is present");
+        assert_eq!(target.entity_type, "person");
         assert_eq!(
             request
                 .target_subject()
@@ -1398,10 +1402,20 @@ mod tests {
                 .as_deref(),
             Some("national_id")
         );
-        assert_eq!(
-            request.target.attributes["date_of_birth"],
-            json!("1990-01-15")
-        );
+        assert_eq!(target.attributes["date_of_birth"], json!("1990-01-15"));
+    }
+
+    #[test]
+    fn evaluate_request_allows_missing_target_for_server_derived_context() {
+        let request: EvaluateRequest = serde_json::from_value(json!({
+            "claims": ["person-is-alive"],
+            "purpose": "https://purpose.example/self"
+        }))
+        .expect("target may be omitted when the server derives self-attestation context");
+
+        assert!(request.target.is_none());
+        assert!(request.target_subject().is_none());
+        assert!(request.request_context().is_none());
     }
 
     #[test]

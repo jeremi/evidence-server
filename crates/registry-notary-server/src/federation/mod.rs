@@ -248,7 +248,10 @@ async fn handle_federated_evaluate(
     };
     let request = EvaluateRequest {
         requester: None,
-        target: EvidenceEntity::from_subject_request("Person", subject.clone()),
+        target: Some(EvidenceEntity::from_subject_request(
+            "Person",
+            subject.clone(),
+        )),
         relationship: None,
         on_behalf_of: None,
         claims: vec![ClaimRef::from(profile.claim_id.clone())],

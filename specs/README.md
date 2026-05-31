@@ -3,6 +3,10 @@
 Design specifications and implementation traces live here. Current operator
 guides, tutorials, SDK docs, and release notes stay in `docs/`.
 
+- [`adr-audit-pseudonym-redesign.md`](adr-audit-pseudonym-redesign.md):
+  accepted design record for versioned audit pseudonym domains, canonical
+  identifier inputs, no-match behavior, retention, key rotation, erasure, and
+  federation pairwise alignment.
 - [`citizen-self-attestation-spec.md`](citizen-self-attestation-spec.md):
   citizen self-attestation behavior, guard order, privacy controls, rate
   limits, credential issuance, and implementation status.

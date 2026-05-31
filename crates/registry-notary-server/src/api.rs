@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary routes.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::rejection::JsonRejection;
@@ -881,7 +881,7 @@ async fn oid4vci_credential(
     };
     let request = EvaluateRequest {
         requester: Some(target.clone()),
-        target,
+        target: Some(target),
         relationship: Some(EvidenceRelationship {
             relationship_type: "self".to_string(),
             attributes: Default::default(),
@@ -1250,6 +1250,34 @@ async fn evaluate(
             );
             return response;
         }
+        if let Err(error) = derive_self_attestation_request_context(
+            &state.self_attestation,
+            &principal,
+            &mut request,
+        ) {
+            if denial_code_from_error(&error) == Some(SelfAttestationDenialCode::SubjectMismatch) {
+                if let Err(rate_error) = consume_subject_mismatch_denial(&state, &principal_hash) {
+                    let mut response = evidence_error_response(rate_error.evidence_error());
+                    attach_self_attestation_rate_limit_audit(
+                        &mut response,
+                        "evaluate_rate_limited",
+                        &request_claim_ids,
+                        rate_error.bucket(),
+                    );
+                    return response;
+                }
+            }
+            let denial_code = denial_code_from_error(&error);
+            let mut response = evidence_error_response(error);
+            attach_self_attestation_audit(
+                &mut response,
+                "evaluate_denied",
+                &request_claim_ids,
+                denial_code,
+                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
         match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
             Ok(context) => {
                 request.purpose = Some(context.purpose.clone());
@@ -1472,6 +1500,7 @@ async fn batch_evaluate(
     match result {
         Ok(result) => {
             let mut response = Json(result.clone()).into_response();
+            let batch_audit_purposes = audit_purposes.clone();
             attach_evidence_audit_with_purposes(
                 &mut response,
                 "batch_evaluate",
@@ -1484,6 +1513,7 @@ async fn batch_evaluate(
                 &mut response,
                 &state.self_attestation_rate_keys,
                 &result,
+                batch_audit_purposes.as_deref(),
             ) {
                 return evidence_error_response(error);
             }
@@ -2181,6 +2211,73 @@ fn oid4vci_bound_subject(
         id: subject_id.to_string(),
         id_type: Some(config.subject_binding.id_type.clone()),
     })
+}
+
+fn self_attestation_bound_subject(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<SubjectRequest, EvidenceError> {
+    let subject_id = principal
+        .verified_subject_binding_value(&config.subject_binding.token_claim)
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::SubjectClaimMissing))?;
+    Ok(SubjectRequest {
+        id: subject_id.to_string(),
+        id_type: Some(config.subject_binding.id_type.clone()),
+    })
+}
+
+fn derive_self_attestation_request_context(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    request: &mut EvaluateRequest,
+) -> Result<(), EvidenceError> {
+    let subject = self_attestation_bound_subject(config, principal)?;
+    let derived = EvidenceEntity::from_subject_request("Person", subject.clone());
+    ensure_optional_entity_matches_subject(config, request.target.as_ref(), &subject)?;
+    ensure_optional_entity_matches_subject(config, request.requester.as_ref(), &subject)?;
+    if let Some(relationship) = request.relationship.as_ref() {
+        if relationship.relationship_type != "self" || !relationship.attributes.is_empty() {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::SubjectMismatch,
+            ));
+        }
+    }
+    if request.on_behalf_of.is_some() {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    request.target = Some(derived.clone());
+    request.requester = Some(derived);
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "self".to_string(),
+        attributes: Default::default(),
+    });
+    Ok(())
+}
+
+fn ensure_optional_entity_matches_subject(
+    config: &SelfAttestationConfig,
+    entity: Option<&EvidenceEntity>,
+    expected: &SubjectRequest,
+) -> Result<(), EvidenceError> {
+    let Some(entity) = entity else {
+        return Ok(());
+    };
+    let Some(actual) = entity.to_subject_request() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    };
+    if actual.id.trim().is_empty()
+        || actual.id != expected.id
+        || actual.id_type.as_deref() != Some(config.subject_binding.id_type.as_str())
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    Ok(())
 }
 
 fn check_oid4vci_self_attestation_rate_limit(
@@ -3008,24 +3105,44 @@ fn attach_evaluate_request_audit(
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
     };
-    audit.target_type = Some(
-        result
-            .map(|result| result.target_ref.entity_type.as_str())
-            .filter(|entity_type| !entity_type.is_empty())
-            .unwrap_or(request.target.entity_type.as_str())
-            .to_string(),
-    );
-    audit.target_ref_hash = Some(match result {
-        Some(result) => hash_audit_handle(keys, "target", &result.target_ref.handle)?,
-        None => hash_audit_entity(keys, "target", &request.target)?,
-    });
+    audit.target_type = result
+        .map(|result| result.target_ref.entity_type.as_str())
+        .or_else(|| {
+            request
+                .target
+                .as_ref()
+                .map(|target| target.entity_type.as_str())
+        })
+        .filter(|entity_type| !entity_type.is_empty())
+        .map(str::to_string);
+    audit.target_ref_hash = match result {
+        Some(result) => Some(hash_audit_handle(
+            keys,
+            "target",
+            result.target_ref.entity_type.as_str(),
+            request.purpose.as_deref(),
+            &result.target_ref.handle,
+        )?),
+        None => match request.target.as_ref() {
+            Some(target) => {
+                hash_audit_matching_attempt(keys, "target", request.purpose.as_deref(), target)?
+            }
+            None => None,
+        },
+    };
     if let Some(requester_ref) = result.and_then(|result| result.requester_ref.as_ref()) {
         audit.requester_type = Some(requester_ref.entity_type.clone());
-        audit.requester_ref_hash =
-            Some(hash_audit_handle(keys, "requester", &requester_ref.handle)?);
+        audit.requester_ref_hash = Some(hash_audit_handle(
+            keys,
+            "requester",
+            requester_ref.entity_type.as_str(),
+            request.purpose.as_deref(),
+            &requester_ref.handle,
+        )?);
     } else if let Some(requester) = request.requester.as_ref() {
         audit.requester_type = Some(requester.entity_type.clone());
-        audit.requester_ref_hash = Some(hash_audit_entity(keys, "requester", requester)?);
+        audit.requester_ref_hash =
+            hash_audit_matching_attempt(keys, "requester", request.purpose.as_deref(), requester)?;
     }
     if let Some(matching) = result.and_then(|result| result.matching.as_ref()) {
         audit.matching_policy_id = Some(matching.policy_id.clone());
@@ -3043,12 +3160,16 @@ fn attach_batch_evaluate_response_audit(
     response: &mut Response,
     keys: &SelfAttestationRateLimitKeys,
     result: &registry_notary_core::BatchEvaluateResponse,
+    audit_purposes: Option<&[String]>,
 ) -> Result<(), EvidenceError> {
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
     };
     let mut batch_items = Vec::with_capacity(result.items.len());
     for item in &result.items {
+        let purpose_scope = audit_purposes
+            .and_then(|purposes| purposes.get(item.input_index))
+            .map(String::as_str);
         let matching_error_code = item
             .errors
             .first()
@@ -3060,7 +3181,17 @@ fn attach_batch_evaluate_response_audit(
             input_index: item.input_index,
             target_type: Some(item.target_ref.entity_type.clone())
                 .filter(|entity_type| !entity_type.is_empty()),
-            target_ref_hash: Some(hash_audit_handle(keys, "target", &item.target_ref.handle)?),
+            target_ref_hash: if item.errors.is_empty() {
+                Some(hash_audit_handle(
+                    keys,
+                    "target",
+                    item.target_ref.entity_type.as_str(),
+                    purpose_scope,
+                    &item.target_ref.handle,
+                )?)
+            } else {
+                None
+            },
             requester_type: item
                 .requester_ref
                 .as_ref()
@@ -3068,7 +3199,16 @@ fn attach_batch_evaluate_response_audit(
             requester_ref_hash: item
                 .requester_ref
                 .as_ref()
-                .map(|requester| hash_audit_handle(keys, "requester", &requester.handle))
+                .filter(|_| item.errors.is_empty())
+                .map(|requester| {
+                    hash_audit_handle(
+                        keys,
+                        "requester",
+                        requester.entity_type.as_str(),
+                        purpose_scope,
+                        &requester.handle,
+                    )
+                })
                 .transpose()?,
             matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
             matching_method: matching.map(|matching| matching.method.clone()),
@@ -3089,30 +3229,90 @@ fn attach_batch_evaluate_response_audit(
 fn hash_audit_handle(
     keys: &SelfAttestationRateLimitKeys,
     role: &str,
+    entity_type: &str,
+    purpose_scope: Option<&str>,
     handle: &str,
 ) -> Result<Hashed<EvidenceEntityReference>, EvidenceError> {
-    keys.subject_ref(role, handle)
+    let input = canonical_audit_handle_input(role, entity_type, purpose_scope, handle)?;
+    keys.audit_pseudonym_ref("matched-reference-v1", &input)
         .map(|hash| Hashed::from_hash(hash.as_str().to_string()))
         .map_err(|error| error.evidence_error())
 }
 
-fn hash_audit_entity(
-    keys: &SelfAttestationRateLimitKeys,
+fn hash_audit_matching_attempt(
+    _keys: &SelfAttestationRateLimitKeys,
     role: &str,
+    purpose_scope: Option<&str>,
     entity: &EvidenceEntity,
-) -> Result<Hashed<EvidenceEntityReference>, EvidenceError> {
-    let stable_input = serde_json::json!({
+) -> Result<Option<Hashed<EvidenceEntityReference>>, EvidenceError> {
+    let _ = canonical_audit_identifier_input(role, purpose_scope, entity)?;
+    Ok(None)
+}
+
+fn canonical_audit_handle_input(
+    role: &str,
+    entity_type: &str,
+    purpose_scope: Option<&str>,
+    handle: &str,
+) -> Result<String, EvidenceError> {
+    serde_json::to_string(&json!({
+        "class": "matched-reference-v1",
+        "version": 1,
         "role": role,
-        "type": entity.entity_type,
-        "id": entity.id,
-        "identifiers": entity.identifiers,
-        "attributes": entity.attributes,
-        "profile": entity.profile,
-    })
-    .to_string();
-    keys.subject_ref(role, &stable_input)
-        .map(|hash| Hashed::from_hash(hash.as_str().to_string()))
-        .map_err(|error| error.evidence_error())
+        "entity_type": entity_type,
+        "purpose_scope": purpose_scope.unwrap_or(""),
+        "handle": handle,
+    }))
+    .map_err(|_| EvidenceError::InvalidRequest)
+}
+
+fn canonical_audit_identifier_input(
+    role: &str,
+    purpose_scope: Option<&str>,
+    entity: &EvidenceEntity,
+) -> Result<Option<String>, EvidenceError> {
+    let mut identifiers = entity
+        .identifiers
+        .iter()
+        .filter(|identifier| !identifier.value.trim().is_empty())
+        .map(|identifier| {
+            let mut canonical = BTreeMap::new();
+            canonical.insert("country", identifier.country.as_deref().unwrap_or(""));
+            canonical.insert("issuer", identifier.issuer.as_deref().unwrap_or(""));
+            canonical.insert("scheme", identifier.scheme.as_str());
+            canonical.insert("value", identifier.value.as_str());
+            canonical
+        })
+        .collect::<Vec<_>>();
+    identifiers.sort_by(|left, right| {
+        (
+            left["scheme"],
+            left["issuer"],
+            left["country"],
+            left["value"],
+        )
+            .cmp(&(
+                right["scheme"],
+                right["issuer"],
+                right["country"],
+                right["value"],
+            ))
+    });
+    identifiers.dedup();
+    if identifiers.is_empty() && entity.id.as_deref().is_none_or(str::is_empty) {
+        return Ok(None);
+    }
+    serde_json::to_string(&json!({
+        "class": "matching-attempt-v1",
+        "version": 1,
+        "role": role,
+        "entity_type": entity.entity_type,
+        "purpose_scope": purpose_scope.unwrap_or(""),
+        "id": entity.id.as_deref().unwrap_or(""),
+        "identifiers": identifiers,
+    }))
+    .map(Some)
+    .map_err(|_| EvidenceError::InvalidRequest)
 }
 
 fn is_matching_audit_code(code: &str) -> bool {
@@ -3144,14 +3344,30 @@ fn attach_self_attestation_credential_audit(
         .map(|result| result.target_ref.entity_type.clone())
         .filter(|entity_type| !entity_type.is_empty());
     let target_ref_hash = first_result
-        .map(|result| hash_audit_handle(keys, "target", &result.target_ref.handle))
+        .map(|result| {
+            hash_audit_handle(
+                keys,
+                "target",
+                result.target_ref.entity_type.as_str(),
+                None,
+                &result.target_ref.handle,
+            )
+        })
         .transpose()?;
     let requester_type = first_result
         .and_then(|result| result.requester_ref.as_ref())
         .map(|requester| requester.entity_type.clone());
     let requester_ref_hash = first_result
         .and_then(|result| result.requester_ref.as_ref())
-        .map(|requester| hash_audit_handle(keys, "requester", &requester.handle))
+        .map(|requester| {
+            hash_audit_handle(
+                keys,
+                "requester",
+                requester.entity_type.as_str(),
+                None,
+                &requester.handle,
+            )
+        })
         .transpose()?;
     let matching = first_result.and_then(|result| result.matching.as_ref());
     response.extensions_mut().insert(EvidenceAuditContext {
@@ -4299,13 +4515,13 @@ mod tests {
     fn evaluate_request(subject_id: &str) -> EvaluateRequest {
         EvaluateRequest {
             requester: None,
-            target: EvidenceEntity::from_subject_request(
+            target: Some(EvidenceEntity::from_subject_request(
                 "Person",
                 SubjectRequest {
                     id: subject_id.to_string(),
                     id_type: Some("national_id".to_string()),
                 },
-            ),
+            )),
             relationship: None,
             on_behalf_of: None,
             claims: vec![ClaimRef::from("person-is-alive")],
@@ -4447,6 +4663,72 @@ mod tests {
             &evaluate_request("NAT-999"),
         )
         .expect_err("mismatched subject must be denied before runtime");
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::SubjectMismatch
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_derives_missing_request_identity_from_token_binding() {
+        let config = self_attestation_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let mut request = EvaluateRequest {
+            requester: None,
+            target: None,
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+
+        derive_self_attestation_request_context(&config, &principal, &mut request)
+            .expect("request identity is derived");
+
+        let target_subject = request
+            .target_subject()
+            .expect("derived target maps to subject");
+        assert_eq!(target_subject.id, "NAT-123");
+        assert_eq!(target_subject.id_type.as_deref(), Some("national_id"));
+        assert_eq!(
+            request
+                .requester
+                .as_ref()
+                .and_then(EvidenceEntity::to_subject_request)
+                .expect("derived requester maps to subject")
+                .id,
+            "NAT-123"
+        );
+        assert_eq!(
+            request
+                .relationship
+                .as_ref()
+                .map(|relationship| relationship.relationship_type.as_str()),
+            Some("self")
+        );
+    }
+
+    #[test]
+    fn self_attestation_derivation_rejects_conflicting_request_identity() {
+        let config = self_attestation_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let mut request = evaluate_request("NAT-999");
+
+        let err = derive_self_attestation_request_context(&config, &principal, &mut request)
+            .expect_err("conflicting target must be denied before runtime");
+
         assert!(matches!(
             err,
             EvidenceError::SelfAttestationDenied {
@@ -4983,7 +5265,7 @@ mod tests {
             Some(2),
         );
 
-        attach_batch_evaluate_response_audit(&mut response, &keys, &result)
+        attach_batch_evaluate_response_audit(&mut response, &keys, &result, None)
             .expect("batch audit context attaches");
 
         let audit = response
@@ -5008,11 +5290,10 @@ mod tests {
             items[1].matching_error_code.as_deref(),
             Some("target.match_ambiguous")
         );
-        assert!(items[1]
-            .target_ref_hash
-            .as_ref()
-            .map(Hashed::as_str)
-            .is_some_and(|hash| !hash.contains("target-handle-2")));
+        assert!(
+            items[1].target_ref_hash.is_none(),
+            "failed batch items must not emit durable matched-reference pseudonyms"
+        );
     }
 
     #[test]
@@ -5024,14 +5305,14 @@ mod tests {
                 "national_id",
                 "NID-REQUESTER",
             )),
-            target: {
+            target: Some({
                 let mut target =
                     EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET");
                 target
                     .attributes
                     .insert("given_name".to_string(), json!("Amina"));
                 target
-            },
+            }),
             relationship: None,
             on_behalf_of: None,
             claims: vec![ClaimRef::from("person-is-alive")],
@@ -5089,6 +5370,40 @@ mod tests {
     }
 
     #[test]
+    fn canonical_audit_identifier_input_sorts_identifiers_and_explicit_empty_fields() {
+        let mut first = registry_notary_core::EvidenceIdentifier {
+            scheme: "national_id".to_string(),
+            value: "NID-1001".to_string(),
+            issuer: None,
+            country: Some("RW".to_string()),
+        };
+        let second = registry_notary_core::EvidenceIdentifier {
+            scheme: "animal_ear_tag".to_string(),
+            value: "EAR-77".to_string(),
+            issuer: Some("vet-registry".to_string()),
+            country: None,
+        };
+        let mut entity = EvidenceEntity::new("Person");
+        entity.identifiers = vec![first.clone(), second.clone()];
+        let canonical = canonical_audit_identifier_input("target", Some("program-a"), &entity)
+            .expect("canonicalizes")
+            .expect("identifier input is present");
+
+        first.country = Some("RW".to_string());
+        let mut reordered = EvidenceEntity::new("Person");
+        reordered.identifiers = vec![second, first];
+        let reordered_canonical =
+            canonical_audit_identifier_input("target", Some("program-a"), &reordered)
+                .expect("canonicalizes")
+                .expect("identifier input is present");
+
+        assert_eq!(canonical, reordered_canonical);
+        assert!(canonical.contains(r#""issuer":"""#));
+        assert!(canonical.contains(r#""country":"""#));
+        assert!(canonical.find("animal_ear_tag") < canonical.find("national_id"));
+    }
+
+    #[test]
     fn credential_audit_context_links_stored_target_and_requester_refs() {
         let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let mut result = claim_result_view("eval-1", "person-is-alive");
@@ -5141,10 +5456,13 @@ mod tests {
         let mut target = EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET");
         target
             .attributes
+            .insert("date_of_birth".to_string(), json!("1984-02-10"));
+        target
+            .attributes
             .insert("given_name".to_string(), json!("Amina"));
         let request = EvaluateRequest {
             requester: None,
-            target,
+            target: Some(target),
             relationship: None,
             on_behalf_of: None,
             claims: vec![ClaimRef::from("person-is-alive")],
@@ -5180,13 +5498,17 @@ mod tests {
             audit.matching_error_code.as_deref(),
             Some("target.attributes_insufficient")
         );
-        let target_hash = audit
-            .target_ref_hash
-            .as_ref()
-            .map(Hashed::as_str)
-            .expect("target ref hash is present");
-        assert!(!target_hash.contains("NID-TARGET"));
-        assert!(!target_hash.contains("Amina"));
+        assert!(
+            audit.target_ref_hash.is_none(),
+            "pre-match target errors must not create durable request-attribute pseudonyms"
+        );
+        let audit_json = format!("{audit:?}");
+        for raw in ["NID-TARGET", "Amina", "1984-02-10"] {
+            assert!(
+                !audit_json.contains(raw),
+                "raw matching input {raw} leaked into audit context: {audit_json}"
+            );
+        }
         assert!(audit.requester_type.is_none());
         assert!(audit.requester_ref_hash.is_none());
     }

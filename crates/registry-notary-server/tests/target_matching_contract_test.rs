@@ -403,7 +403,7 @@ fn principal() -> EvidencePrincipal {
 fn evaluate_request(target: EvidenceEntity, claim: &str) -> EvaluateRequest {
     EvaluateRequest {
         requester: None,
-        target,
+        target: Some(target),
         relationship: Some(EvidenceRelationship {
             relationship_type: "self".to_string(),
             attributes: BTreeMap::new(),
@@ -831,7 +831,7 @@ async fn purpose_rejection_precedes_matching_policy_rejection() {
         person_target("Amina", "Diallo", Some("1984-02-10")),
         "person-is-alive",
     );
-    request.target.entity_type = "Animal".to_string();
+    request.target.as_mut().expect("target present").entity_type = "Animal".to_string();
     request.purpose = Some("marketing".to_string());
 
     let error = runtime
@@ -937,6 +937,36 @@ async fn empty_target_is_rejected_before_source_read() {
         .expect_err("empty target has no matching input");
 
     assert_eq!(error.code(), "target.attributes_insufficient");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn machine_evaluate_without_target_is_rejected_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![person_claim()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            EvaluateRequest {
+                requester: None,
+                target: None,
+                relationship: None,
+                on_behalf_of: None,
+                claims: vec![ClaimRef::new("person-is-alive")],
+                disclosure: None,
+                format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                purpose: Some("benefits_eligibility".to_string()),
+            },
+            None,
+        )
+        .await
+        .expect_err("machine evaluation requires a target");
+
+    assert_eq!(error.code(), "request.invalid");
     assert_eq!(source.reads(), 0);
 }
 

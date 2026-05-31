@@ -1873,7 +1873,6 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .add_header("authorization", authorization.clone())
         .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
-            "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": "application/vnd.registry-notary.claim-result+json"
@@ -3457,7 +3456,7 @@ async fn batch_evaluation_audit_records_per_item_target_model_context() {
     assert_eq!(items[1]["input_index"], json!(1));
     assert_eq!(items[1]["matching_outcome"], json!("error"));
     assert_eq!(items[1]["matching_error_code"], json!("target.not_found"));
-    assert!(items[1]["target_ref_hash"].as_str().is_some());
+    assert!(items[1].get("target_ref_hash").is_none());
 }
 
 #[tokio::test]

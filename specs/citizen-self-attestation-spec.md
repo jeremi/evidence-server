@@ -92,8 +92,9 @@ linkability, detectability, and disclosure.
   unchanged.
 - Self-attestation must require OIDC authentication. Static credentials are not
   sufficient for citizen self-service.
-- A self-attestation request must be allowed only when the request subject
-  matches a configured verified-token claim.
+- A self-attestation request must be allowed only when the server-derived
+  subject from a configured verified-token claim is used as the requester and
+  target context.
 - Subject binding must run before source reads, claim evaluation, rendering, or
   credential issuance.
 - Self-attestation must allow only configured claims, formats, disclosures, and
@@ -351,12 +352,12 @@ credentials plus `SourceCapability::SelfAttestation`.
 
 ## Subject Binding
 
-V1 supports exact equality between one verified token claim and one request
-field:
+V1 supports exact equality between one verified token claim and the server
+derived target identifier:
 
 ```text
-principal.verified_claims[token_claim] == request.target.identifiers[configured_scheme].value
-request.target.identifiers[configured_scheme].scheme == subject_binding.identifier_scheme
+principal.verified_claims[token_claim] == derived.target.identifiers[configured_scheme].value
+derived.target.identifiers[configured_scheme].scheme == subject_binding.identifier_scheme
 ```
 
 The token claim should be:
@@ -391,13 +392,14 @@ V1 should support only `normalize: exact`. Later versions may add explicit
 normalizers such as case folding or punctuation removal, but those should be
 named, tested, and jurisdiction-specific.
 
-V1 accepts exactly one target identifier for self-attestation. The config
-surface for `subject_binding.request_field` is an enum, `TargetIdentifier`, not
-a free-form string.
-Self-attestation requests must be rejected if they include alternate, duplicate,
-or nested subject identifiers outside the supported request field, including
-query parameters, headers, arrays of items, per-claim target overrides, or body
-fields that could override the configured target identifier.
+V1 derives the self-attestation requester and target from the configured
+subject-binding token claim. The config surface for `subject_binding.request_field`
+is retained as a compatibility label for the derived target identifier, not as a
+caller-controlled request field.
+Self-attestation requests must be rejected if they include conflicting
+caller-supplied identity context, including query parameters, headers, arrays of
+items, per-claim target overrides, `on_behalf_of`, or body fields that could
+override the configured token-bound subject.
 
 ## Runtime Behavior
 
@@ -818,10 +820,10 @@ At minimum, the implementation must emit auditable records for:
 
 The token-claim name is safe to record because it is configuration metadata. The
 token-claim value is not safe to record unless separately hashed with the audit
-hasher. The request subject id, OIDC `sub`, civil id, access token, holder proof,
-SD-JWT disclosures, source records, source tokens, and raw Relay response bodies
-must not appear in audit records, logs, metrics, Problem Details, or generated
-lab artifacts.
+hasher. Caller-supplied or derived subject ids, OIDC `sub`, civil id, access
+token, holder proof, SD-JWT disclosures, source records, source tokens, and raw
+Relay response bodies must not appear in audit records, logs, metrics, Problem
+Details, or generated lab artifacts.
 
 For pre-authentication or invalid-token rate-limit denials, `access_mode` may be
 `unknown` because the request has not been classified. Once OIDC verification
@@ -1043,7 +1045,8 @@ Definition of Done:
 - Source reads reject raw row access, arbitrary claim ids, and machine-only
   source operations when the capability is `SelfAttestation`.
 - Ambiguous citizen or machine-client classification fails closed.
-- A target-binding mismatch returns a stable denial before any source read.
+- A supplied identity-context mismatch returns a stable denial before any source
+  read.
 - A subject mismatch writes a self-attestation denial audit event without raw
   target identifiers.
 - A claim outside the allow-list is denied before any source read.
@@ -1054,8 +1057,8 @@ Definition of Done:
 - With `scope_policy = disabled`, a token with no self-attestation scope may
   proceed only through the allowed citizen client/audience, assurance, and
   subject-binding checks.
-- Alternate or duplicate target identifiers outside the configured
-  `request.target.identifiers[]` entry are rejected.
+- Caller-supplied `target`, `requester`, `relationship`, or `on_behalf_of`
+  values that conflict with the token-derived self context are rejected.
 - Missing or unallowed purpose values fail before source reads.
 - Subject mismatch and repeated denial attempts are rate limited without source
   reads.

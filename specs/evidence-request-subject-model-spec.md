@@ -250,7 +250,9 @@ The public request envelope is:
 - `requester`: optional entity object. Present when the caller needs to supply
   requester context beyond the authenticated principal. Wallet and ordinary
   machine-client flows may derive requester from authentication instead.
-- `target`: required entity object. This is the entity the claim is about.
+- `target`: entity object. Machine-client evaluation requires it. Citizen
+  self-attestation omits it by default because Registry Notary derives the
+  target from the verified token binding.
 - `relationship`: optional object. Kept as an object, not a string, so later
   profiles can add evidence, validity windows, or relationship-specific
   attributes without another wire break.
@@ -747,6 +749,9 @@ For citizen self-attestation, the safe default is:
   from arbitrary descriptive claims, unless a configured wallet credential
   profile explicitly permits a separate target.
 - `relationship.type` defaults to `self`.
+- conflicting caller-supplied `target`, `requester`, `relationship`, or
+  `on_behalf_of` context is rejected with `self_attestation.subject_mismatch`
+  before source reads.
 - batch evaluation remains disabled.
 - credential issuance stays holder-bound through the wallet proof key.
 
@@ -1533,3 +1538,91 @@ Wave 5: Clients, Docs, And CI Hardening
 - Review checkpoint: final code review verifies the Definition Of Done line by
   line. No feature is marked complete until its implementation, tests, docs,
   and security review are all merged.
+
+## Follow-Up Definition Of Done
+
+Audit pseudonym implementation work must follow the accepted
+[Audit Pseudonym Redesign ADR](adr-audit-pseudonym-redesign.md).
+
+The audit pseudonym and self-attestation derivation follow-up is done only when
+all criteria below are satisfied:
+
+- A short audit pseudonym ADR is committed and reviewed before audit hash code
+  changes land.
+- The ADR defines versioned hash domains for routine matched references,
+  matching attempts, and investigation-only references, including role, entity
+  type, purpose scope, and canonical input fields.
+- Identifier hash inputs are stable: identifiers are sorted, missing
+  `issuer` and `country` are canonicalized to explicit empty values, and the
+  canonical input includes role, entity type, scheme, issuer, country, value,
+  purpose scope, and pseudonym version.
+- Pure no-match failures do not emit a long-lived attribute-derived entity
+  pseudonym. If repeat-probe correlation is enabled, it is explicitly
+  configured as a short-lived, purpose-scoped matching-attempt pseudonym.
+- Audit retention, key rotation, erasure, and hash-chain crypto-shredding
+  limits are documented in the ADR or deployment hardening guide.
+- The audit design is reconciled with federation pairwise subject hashes:
+  federation and audit use separate secrets and domains, and tests prove the
+  two handles are not interchangeable.
+- Self-attestation `/v1/evaluations` derives `target`, `requester`, and
+  `relationship: { "type": "self" }` from the verified token binding.
+- Self-attestation request bodies no longer need to provide target identity;
+  any conflicting supplied `target`, `requester`, or `relationship` is rejected
+  with a deliberate, documented public problem code.
+- Machine-client evaluation still requires caller-supplied `target`.
+- OID4VCI and non-wallet self-attestation describe the same identity-derivation
+  rule in specs, OpenAPI, client docs, and examples.
+- Tests scan serialized audit output and logs for representative raw values,
+  including names, dates of birth, national identifiers, parcel ids, and animal
+  ear tags, and fail if any are present.
+- Focused tests for audit pseudonyms, self-attestation derivation, conflict
+  rejection, machine-client target validation, OpenAPI schema shape, client
+  examples, and the request-body-limit regression pass locally.
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`, and `cargo test --workspace --all-features`
+  pass before the work is marked complete.
+
+## Follow-Up Implementation Plan
+
+Wave 0: Design Freeze
+
+- Parallel work: one worker drafts the audit pseudonym ADR while another drafts
+  the self-attestation derivation spec patch.
+- DoD: the ADR answers hash domains, canonical input, no-match behavior,
+  retention, rotation, erasure, and federation alignment; the spec patch states
+  the self-attestation derivation and conflict rule.
+- Review checkpoint: security, API, and federation reviewers approve both
+  documents before implementation starts.
+
+Wave 1: Self-Attestation Contract
+
+- Worker A owns self-attestation request handling, OpenAPI, client docs, and
+  examples.
+- DoD: self-attestation evaluation succeeds without caller-supplied target
+  identity, rejects conflicting identity fields, and machine clients still fail
+  without `target`; focused HTTP and OpenAPI tests pass.
+- Review checkpoint: API review verifies no supported docs or examples teach
+  caller-selected self-attestation targets.
+
+Wave 2: Audit Pseudonym Contract
+
+- Worker B owns audit hash helpers, canonicalization, redaction tests, and
+  deployment guidance.
+- DoD: success audit uses canonical matched refs, no-match audit does not emit
+  durable attribute-derived handles by default, identifiers canonicalize
+  deterministically, federation handles remain separate, and raw-value scan
+  tests pass.
+- Review checkpoint: security review validates the ADR line by line against the
+  implementation and tests before any feature is marked complete.
+
+Wave 3: Integration And Regression Closure
+
+- Worker C owns docs/spec consistency, request-body-limit regression coverage,
+  and final search cleanup while the main integrator reviews code from Workers
+  A and B.
+- DoD: all changed docs agree on the self-attestation and audit models, the
+  request-body-limit regression is fixed or explicitly documented as unrelated,
+  and focused plus full workspace verification commands pass.
+- Review checkpoint: final review checks the Follow-Up Definition Of Done item
+  by item; unresolved items are listed as blockers, not carried as implicit
+  follow-up work.

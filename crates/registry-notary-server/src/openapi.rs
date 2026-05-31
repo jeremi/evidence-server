@@ -1251,7 +1251,7 @@ fn claim_ref_schema() -> Value {
 fn evaluate_request_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["target", "claims"],
+        "required": ["claims"],
         "properties": {
             "requester": { "$ref": "#/components/schemas/EvidenceEntity" },
             "target": { "$ref": "#/components/schemas/EvidenceEntity" },
@@ -2565,6 +2565,10 @@ mod tests {
         assert!(evaluate_request.get("subject").is_none());
         assert!(evaluate_request.get("id_type").is_none());
         assert!(evaluate_request.get("target").is_some());
+        assert_eq!(
+            doc["components"]["schemas"]["EvaluateRequest"]["required"],
+            json!(["claims"])
+        );
 
         let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
         assert!(batch_request.get("subjects").is_none());

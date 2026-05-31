@@ -1043,7 +1043,11 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
-        if !request.target.has_matching_input() {
+        let target = request
+            .target
+            .as_ref()
+            .ok_or(EvidenceError::InvalidRequest)?;
+        if !target.has_matching_input() {
             return Err(EvidenceError::TargetAttributesInsufficient);
         }
         let claim_versions = requested_claim_versions(&request.claims)?;
@@ -1082,7 +1086,9 @@ impl RegistryNotaryRuntime {
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
                 Arc::clone(&source),
-                request.request_context(),
+                request
+                    .request_context()
+                    .ok_or(EvidenceError::InvalidRequest)?,
                 purpose.clone(),
                 evaluation_id.clone(),
                 now,
@@ -1248,7 +1254,7 @@ impl RegistryNotaryRuntime {
                 };
                 let eval = EvaluateRequest {
                     requester: item.requester,
-                    target: item.target,
+                    target: Some(item.target),
                     relationship: item.relationship,
                     on_behalf_of: item.on_behalf_of,
                     claims: claims_list,
@@ -1442,7 +1448,9 @@ impl RegistryNotaryRuntime {
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
                 Arc::clone(&source),
-                request.request_context(),
+                request
+                    .request_context()
+                    .ok_or(EvidenceError::InvalidRequest)?,
                 purpose_override.to_string(),
                 evaluation_id.clone(),
                 now,
@@ -3322,13 +3330,13 @@ mod tests {
     fn test_request(claim: &str) -> EvaluateRequest {
         EvaluateRequest {
             requester: None,
-            target: registry_notary_core::EvidenceEntity::from_subject_request(
+            target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
                 "Person",
                 SubjectRequest {
                     id: "person-1".to_string(),
                     id_type: None,
                 },
-            ),
+            )),
             relationship: None,
             on_behalf_of: None,
             claims: vec![ClaimRef::from(claim)],
@@ -3695,11 +3703,11 @@ mod tests {
         let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
         let store = EvidenceStore::default();
         let mut request = test_request("selected");
-        request.target = registry_notary_core::EvidenceEntity::with_identifier(
+        request.target = Some(registry_notary_core::EvidenceEntity::with_identifier(
             "Person",
             "national_id",
             "person-1",
-        );
+        ));
 
         let results = RegistryNotaryRuntime::new()
             .evaluate(
