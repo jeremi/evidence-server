@@ -576,7 +576,7 @@ metadata:
 - subject-binding claim name;
 - subject-binding value hash using the audit hasher or an equivalent keyed
   hasher;
-- requested claim set hash;
+- requested claim set content hash;
 - disclosure mode;
 - result format;
 - `delegation_chain = []` for v1;
@@ -591,9 +591,14 @@ the profile purpose id, and the credential validity ceiling. Rate-limit,
 discovery, CORS, and unrelated claim/profile config are excluded so operational
 tuning does not invalidate otherwise valid in-flight evaluations.
 
+The requested claim set hash is a deterministic content hash over configured
+claim identifiers. It is not an identity pseudonym and is intentionally
+independent of audit-key rotation so render and credential issuance can verify
+that the requested claims did not change.
+
 Rotating the audit hasher key invalidates in-flight self-attestation
-evaluations because principal, subject-binding, and claim hashes can no longer
-be recomputed. This is acceptable in v1 because
+evaluations because principal and subject-binding hashes can no longer be
+recomputed. This is acceptable in v1 because
 `max_evaluation_age_seconds <= 600`. No key-id or multi-key verification
 mechanism is in scope for v1.
 
