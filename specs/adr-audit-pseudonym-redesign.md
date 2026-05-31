@@ -35,8 +35,11 @@ credential signing, or request signing.
 
 ### Versioned Hash Domains
 
-Every pseudonym is bound to a versioned hash domain. The domain id is included
-in the HMAC domain separator and canonical input.
+Every pseudonym is bound to a versioned hash domain. Notary passes the domain id
+as the `class` argument to
+`AuditKeyHasher::audit_reference_hash(class, scope, canonical_input)`, and also
+includes it in the canonical JSON input so offline reviewers can identify which
+normalization rules were used.
 
 | Domain id | Event use | Purpose |
 | --- | --- | --- |
@@ -44,10 +47,10 @@ in the HMAC domain separator and canonical input.
 | `matching-attempt-v1` | optional no-match repeat-probe detection | Short-lived, purpose-scoped correlation of failed matching attempts when explicitly enabled by deployment policy. |
 | `investigation-reference-v1` | elevated investigation or abuse-response events | Separately authorized handle for incident review, never emitted by routine evaluation paths. |
 
-The domain separator is:
+The platform hash primitive frames the HMAC input as:
 
 ```text
-registry-notary:audit-pseudonym:<domain id>
+registry-platform:audit-reference:v1 || len(class) || class || len(scope) || scope || len(canonical_input) || canonical_input
 ```
 
 Changing canonical input fields, normalization, retention behavior, or key
