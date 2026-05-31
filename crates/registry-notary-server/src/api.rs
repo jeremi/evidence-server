@@ -4020,7 +4020,7 @@ mod tests {
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
-    use registry_platform_testing::sign_openid4vci_proof_jwt;
+    use registry_platform_testing::{assert_json_absent_strings, sign_openid4vci_proof_jwt};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5502,13 +5502,9 @@ mod tests {
             audit.target_ref_hash.is_none(),
             "pre-match target errors must not create durable request-attribute pseudonyms"
         );
-        let audit_json = format!("{audit:?}");
-        for raw in ["NID-TARGET", "Amina", "1984-02-10"] {
-            assert!(
-                !audit_json.contains(raw),
-                "raw matching input {raw} leaked into audit context: {audit_json}"
-            );
-        }
+        let audit_value = json!({ "debug": format!("{audit:?}") });
+        assert_json_absent_strings(&audit_value, ["NID-TARGET", "Amina", "1984-02-10"])
+            .expect("raw matching inputs are absent from audit context");
         assert!(audit.requester_type.is_none());
         assert!(audit.requester_ref_hash.is_none());
     }

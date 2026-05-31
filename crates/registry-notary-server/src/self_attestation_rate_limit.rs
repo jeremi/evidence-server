@@ -178,11 +178,12 @@ impl SelfAttestationRateLimitKeys {
                 reason: "audit pseudonym input is empty".to_string(),
             });
         }
-        let hashed = self.hasher.hash(&format!(
-            "registry-notary:audit-pseudonym:v1:{}:{class}:{}:{canonical_input}",
-            class.len(),
-            canonical_input.len()
-        ));
+        let hashed = self
+            .hasher
+            .audit_reference_hash(class, "", canonical_input)
+            .map_err(|error| SelfAttestationRateLimitError::Unavailable {
+                reason: error.to_string(),
+            })?;
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
     }

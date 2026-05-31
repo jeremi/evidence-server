@@ -18,10 +18,12 @@ schemas, or runtime configuration.
 
 ## Decision
 
-Audit pseudonyms are HMAC-SHA-256 values over canonical JSON inputs. Serialized
-audit fields use the platform hash encoding, currently `hmac-sha256:<digest>`.
-The pseudonym class and version are bound inside the HMAC domain-separated input
-rather than exposed as raw personal-data-bearing fields.
+Audit pseudonyms are HMAC-SHA-256 values over Notary-owned canonical JSON inputs
+using the shared `registry-platform-audit` audit reference hash primitive.
+Serialized audit fields use the platform hash encoding, currently
+`hmac-sha256:<digest>`. The pseudonym class and version are bound inside the
+platform HMAC domain-separated input rather than exposed as raw
+personal-data-bearing fields.
 
 ```text
 hmac-sha256:<digest>
