@@ -154,7 +154,8 @@ over-collect, over-disclose, and become hard to authorize safely.
 
 Every claim should answer:
 
-- Who is the subject?
+- Which target entity is being evaluated?
+- Is requester identity or relationship context needed?
 - Which caller scope may evaluate it?
 - Which source fields are required?
 - What happens when no record is found?
@@ -282,8 +283,9 @@ issued by an unrelated profile.
 
 ## Batch And Bulk Reads
 
-Batch evaluation lets one request evaluate many subjects for a claim. It should
-be enabled only when the source and caller are ready for that access pattern:
+Batch evaluation lets one request evaluate many target items for a claim. It
+should be enabled only when the source and caller are ready for that access
+pattern:
 
 ```yaml
 operations:
@@ -292,12 +294,14 @@ operations:
     max_subjects: 100
 ```
 
-`evidence.inline_batch_limit` sets a general default. Claim-level
-`max_subjects` should be lower when a source is sensitive or slow.
+`evidence.inline_batch_limit` sets a general default. The claim-level
+`max_subjects` config key is retained as the limit name for now, but it applies
+to batch `items[]` target entries and should be lower when a source is sensitive
+or slow.
 
 Bulk source modes are separate from API batch evaluation:
 
-- `none`: one source read per subject.
+- `none`: one source read per target item.
 - `dci_batched_search`: DCI source supports a batched search envelope.
 - `rda_in_filter`: Registry Data API source supports an `in` style filter and
   the operator attests that each lookup is unique.
