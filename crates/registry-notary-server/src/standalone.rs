@@ -23,11 +23,12 @@ use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
-    Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
-    RequestIdentifier, SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource,
-    SelfAttestationDenialCode, SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig,
-    SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
-    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
+    EvidenceRequestContext, Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier,
+    RateLimitBucket, RequestIdentifier, SelfAttestationAssuranceClaimSource,
+    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
+    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
+    SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName,
+    VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -764,6 +765,33 @@ impl SourceReader for HttpEvidenceSources {
         })
     }
 
+    fn read_one_for_context<'a>(
+        &'a self,
+        binding: &'a SourceBindingConfig,
+        context: &'a EvidenceRequestContext,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            let connection = self
+                .source_connection(binding)
+                .ok_or(EvidenceError::SourceUnavailable)?;
+            match binding.connector {
+                SourceConnectorKind::RegistryDataApi => {
+                    read_remote_registry_data_api_one_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+                SourceConnectorKind::Dci => {
+                    read_external_dci_http_one_for_context(
+                        self, connection, binding, context, purpose,
+                    )
+                    .await
+                }
+            }
+        })
+    }
+
     fn read_many<'a>(
         &'a self,
         bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
@@ -823,6 +851,37 @@ impl SourceReader for HttpEvidenceSources {
                 }
             };
             outcome
+        })
+    }
+
+    fn read_many_context<'a>(
+        &'a self,
+        bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(async move {
+            if bindings.iter().all(|(binding, context)| {
+                matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id")
+                    && context.target_subject().is_some()
+                    && context.requester.is_none()
+                    && context.relationship.is_none()
+                    && context.on_behalf_of.is_none()
+            }) {
+                let legacy_bindings: Vec<(SourceBindingConfig, SubjectRequest)> = bindings
+                    .iter()
+                    .filter_map(|(binding, context)| {
+                        context
+                            .target_subject()
+                            .map(|subject| (binding.clone(), subject))
+                    })
+                    .collect();
+                return self.read_many(legacy_bindings, purpose).await;
+            }
+            let mut results = Vec::with_capacity(bindings.len());
+            for (binding, context) in bindings {
+                results.push(self.read_one_for_context(&binding, &context, purpose).await);
+            }
+            results
         })
     }
 
@@ -1838,6 +1897,15 @@ async fn auth_audit_middleware(
                 .bucket()
                 .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
             policy_hash: None,
+            target_type: None,
+            target_ref_hash: None,
+            requester_type: None,
+            requester_ref_hash: None,
+            matching_policy_id: None,
+            matching_method: None,
+            matching_outcome: None,
+            matching_error_code: None,
+            batch_items: None,
         });
         let audit_event = build_audit_event(
             None,
@@ -1875,6 +1943,15 @@ async fn auth_audit_middleware(
                         .bucket()
                         .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
                     policy_hash: None,
+                    target_type: None,
+                    target_ref_hash: None,
+                    requester_type: None,
+                    requester_ref_hash: None,
+                    matching_policy_id: None,
+                    matching_method: None,
+                    matching_outcome: None,
+                    matching_error_code: None,
+                    batch_items: None,
                 });
                 let audit_event = build_audit_event(
                     None,
@@ -2034,6 +2111,15 @@ fn build_audit_event(
     let holder_binding_mode = audit.and_then(|context| context.holder_binding_mode.clone());
     let rate_limit_bucket = audit.and_then(|context| context.rate_limit_bucket.clone());
     let policy_hash = audit.and_then(|context| context.policy_hash.clone());
+    let target_type = audit.and_then(|context| context.target_type.clone());
+    let target_ref_hash = audit.and_then(|context| context.target_ref_hash.clone());
+    let requester_type = audit.and_then(|context| context.requester_type.clone());
+    let requester_ref_hash = audit.and_then(|context| context.requester_ref_hash.clone());
+    let matching_policy_id = audit.and_then(|context| context.matching_policy_id.clone());
+    let matching_method = audit.and_then(|context| context.matching_method.clone());
+    let matching_outcome = audit.and_then(|context| context.matching_outcome.clone());
+    let matching_error_code = audit.and_then(|context| context.matching_error_code.clone());
+    let batch_items = audit.and_then(|context| context.batch_items.clone());
     let error_code = error.map(|context| context.0.clone());
     let decision = audit
         .and_then(|context| context.verification_decision.clone())
@@ -2081,6 +2167,15 @@ fn build_audit_event(
         rate_limit_bucket,
         policy_version: None,
         policy_hash,
+        target_type,
+        target_ref_hash,
+        requester_type,
+        requester_ref_hash,
+        matching_policy_id,
+        matching_method,
+        matching_outcome,
+        matching_error_code,
+        batch_items,
     }
 }
 
@@ -2594,8 +2689,31 @@ async fn read_remote_registry_data_api_one(
     subject: &SubjectRequest,
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
-    let lookup_field = binding.lookup.field.clone();
     let lookup_value = lookup_value(binding, subject)?;
+    read_remote_registry_data_api_one_lookup(sources, connection, binding, lookup_value, purpose)
+        .await
+}
+
+async fn read_remote_registry_data_api_one_for_context(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    let lookup_value = lookup_value_for_context(binding, context)?;
+    read_remote_registry_data_api_one_lookup(sources, connection, binding, lookup_value, purpose)
+        .await
+}
+
+async fn read_remote_registry_data_api_one_lookup(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    lookup_value: Value,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    let lookup_field = binding.lookup.field.clone();
     let fields = projected_source_fields_with_lookup(binding, &lookup_field);
     let url = registry_data_api_url(&connection.base_url, binding)?;
     let query_pairs = vec![
@@ -2643,6 +2761,27 @@ async fn read_external_dci_http_one(
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
     let lookup_value = lookup_value(binding, subject)?;
+    read_external_dci_http_one_lookup(sources, connection, binding, lookup_value, purpose).await
+}
+
+async fn read_external_dci_http_one_for_context(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    let lookup_value = lookup_value_for_context(binding, context)?;
+    read_external_dci_http_one_lookup(sources, connection, binding, lookup_value, purpose).await
+}
+
+async fn read_external_dci_http_one_lookup(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    lookup_value: Value,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
     let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
     let body = send_request_with_retry(
@@ -3484,6 +3623,88 @@ fn lookup_value(
     }
 }
 
+fn lookup_value_for_context(
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+) -> Result<Value, EvidenceError> {
+    if binding.lookup.op != "eq" {
+        return Err(EvidenceError::InvalidRequest);
+    }
+    match context_lookup_value(binding.lookup.input.as_str(), context) {
+        Some(value) => Ok(value),
+        None if matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id") => context
+            .target_subject()
+            .map(|subject| Value::String(subject.id))
+            .ok_or(EvidenceError::TargetAttributesInsufficient),
+        None => Err(missing_context_lookup_error(binding.lookup.input.as_str())),
+    }
+}
+
+fn context_lookup_value(path: &str, context: &EvidenceRequestContext) -> Option<Value> {
+    match path {
+        "subject_id" | "subject.id" | "target.id" => context
+            .target
+            .id
+            .as_ref()
+            .map(|value| Value::String(value.clone())),
+        "requester.id" => context
+            .requester
+            .as_ref()
+            .and_then(|requester| requester.id.as_ref())
+            .map(|value| Value::String(value.clone())),
+        _ if path.starts_with("target.attributes.") => {
+            let key = path.strip_prefix("target.attributes.")?;
+            context.target.attributes.get(key).cloned()
+        }
+        _ if path.starts_with("requester.attributes.") => {
+            let key = path.strip_prefix("requester.attributes.")?;
+            context
+                .requester
+                .as_ref()
+                .and_then(|requester| requester.attributes.get(key))
+                .cloned()
+        }
+        _ if path.starts_with("relationship.attributes.") => {
+            let key = path.strip_prefix("relationship.attributes.")?;
+            context
+                .relationship
+                .as_ref()
+                .and_then(|relationship| relationship.attributes.get(key))
+                .cloned()
+        }
+        _ if path.starts_with("target.identifiers.") => {
+            let scheme = path.strip_prefix("target.identifiers.")?;
+            context
+                .target
+                .identifier_value(scheme)
+                .map(|value| Value::String(value.to_string()))
+        }
+        _ if path.starts_with("requester.identifiers.") => {
+            let scheme = path.strip_prefix("requester.identifiers.")?;
+            context
+                .requester
+                .as_ref()
+                .and_then(|requester| requester.identifier_value(scheme))
+                .map(|value| Value::String(value.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn missing_context_lookup_error(path: &str) -> EvidenceError {
+    if path.starts_with("target.identifiers.") {
+        EvidenceError::TargetIdentifierMissing
+    } else if path.starts_with("requester.identifiers.") {
+        EvidenceError::RequesterIdentifierMissing
+    } else if path.starts_with("requester.attributes.") {
+        EvidenceError::RequesterAttributesInsufficient
+    } else if path.starts_with("relationship.attributes.") {
+        EvidenceError::RelationshipAttributesInsufficient
+    } else {
+        EvidenceError::TargetAttributesInsufficient
+    }
+}
+
 fn collect_claim_required_scopes(
     evidence: &EvidenceConfig,
     claim_id: &str,
@@ -3654,6 +3875,15 @@ mod tests {
             rate_limit_bucket: None,
             policy_version: None,
             policy_hash: None,
+            target_type: None,
+            target_ref_hash: None,
+            requester_type: None,
+            requester_ref_hash: None,
+            matching_policy_id: None,
+            matching_method: None,
+            matching_outcome: None,
+            matching_error_code: None,
+            batch_items: None,
         }
     }
 
@@ -4088,6 +4318,15 @@ credential_profiles:
             holder_binding_mode: None,
             rate_limit_bucket: None,
             policy_hash: None,
+            target_type: Some("person".to_string()),
+            target_ref_hash: Some(Hashed::from_hash("sha256:target")),
+            requester_type: Some("person".to_string()),
+            requester_ref_hash: Some(Hashed::from_hash("sha256:requester")),
+            matching_policy_id: Some("civil-registry-v1".to_string()),
+            matching_method: Some("configured_lookup".to_string()),
+            matching_outcome: Some("matched".to_string()),
+            matching_error_code: None,
+            batch_items: None,
         });
 
         let event = build_audit_event(
@@ -4123,6 +4362,22 @@ credential_profiles:
                 .map(|value| value.as_str()),
             Some("person_is_alive_sd_jwt")
         );
+        assert_eq!(event.target_type.as_deref(), Some("person"));
+        assert_eq!(
+            event.target_ref_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:target")
+        );
+        assert_eq!(event.requester_type.as_deref(), Some("person"));
+        assert_eq!(
+            event.requester_ref_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:requester")
+        );
+        assert_eq!(
+            event.matching_policy_id.as_deref(),
+            Some("civil-registry-v1")
+        );
+        assert_eq!(event.matching_method.as_deref(), Some("configured_lookup"));
+        assert_eq!(event.matching_outcome.as_deref(), Some("matched"));
     }
 
     fn test_binding(dataset: &str, entity: &str) -> SourceBindingConfig {
@@ -4139,6 +4394,7 @@ credential_profiles:
                 cardinality: "one".to_string(),
             },
             fields: BTreeMap::new(),
+            matching: registry_notary_core::SourceMatchingConfig::default(),
         }
     }
 
@@ -4475,10 +4731,16 @@ sources:
                 &EvidenceStore::default(),
                 &principal,
                 EvaluateRequest {
-                    subject: SubjectRequest {
-                        id: "person-123".to_string(),
-                        id_type: None,
-                    },
+                    requester: None,
+                    target: registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    ),
+                    relationship: None,
+                    on_behalf_of: None,
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -4532,10 +4794,16 @@ sources:
                 &EvidenceStore::default(),
                 &principal,
                 EvaluateRequest {
-                    subject: SubjectRequest {
-                        id: "retry-sentinel".to_string(),
-                        id_type: None,
-                    },
+                    requester: None,
+                    target: registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "retry-sentinel".to_string(),
+                            id_type: None,
+                        },
+                    ),
+                    relationship: None,
+                    on_behalf_of: None,
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -5059,6 +5327,56 @@ sources:
         assert_eq!(
             url.as_str(),
             "https://registry.example.test/api/v1/datasets/farmer%2Fregistry/entities/farmer%3Factive/records"
+        );
+    }
+
+    #[test]
+    fn context_lookup_value_supports_requester_and_relationship_paths() {
+        let mut binding = test_binding("people", "person");
+        let mut requester =
+            registry_notary_core::EvidenceEntity::with_identifier("Person", "national_id", "REQ-1");
+        requester
+            .attributes
+            .insert("birthdate".to_string(), json!("1984-02-10"));
+        let mut relationship = registry_notary_core::EvidenceRelationship {
+            relationship_type: "guardian".to_string(),
+            attributes: BTreeMap::new(),
+        };
+        relationship
+            .attributes
+            .insert("case_id".to_string(), json!("CASE-9"));
+        let context = EvidenceRequestContext {
+            requester: Some(requester),
+            target: registry_notary_core::EvidenceEntity::with_identifier(
+                "Person",
+                "national_id",
+                "NID-1",
+            ),
+            relationship: Some(relationship),
+            on_behalf_of: None,
+        };
+
+        binding.lookup.input = "requester.identifiers.national_id".to_string();
+        assert_eq!(
+            lookup_value_for_context(&binding, &context).expect("requester id resolves"),
+            json!("REQ-1")
+        );
+        binding.lookup.input = "requester.attributes.birthdate".to_string();
+        assert_eq!(
+            lookup_value_for_context(&binding, &context).expect("requester attr resolves"),
+            json!("1984-02-10")
+        );
+        binding.lookup.input = "relationship.attributes.case_id".to_string();
+        assert_eq!(
+            lookup_value_for_context(&binding, &context).expect("relationship attr resolves"),
+            json!("CASE-9")
+        );
+        binding.lookup.input = "requester.identifiers.missing".to_string();
+        assert_eq!(
+            lookup_value_for_context(&binding, &context)
+                .expect_err("missing requester identifier is specific")
+                .code(),
+            "requester.identifier_missing"
         );
     }
 

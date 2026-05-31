@@ -175,7 +175,7 @@ source_bindings:
     dataset: civil_registry
     entity: birth_registration
     lookup:
-      input: subject_id
+      input: target.identifiers.national_id
       field: UIN
       op: eq
       cardinality: one
@@ -190,7 +190,10 @@ Important choices:
 
 - `required_scope`: scope the caller must have before this binding can read the
   source.
-- `lookup.input`: request input, usually `subject_id`.
+- `lookup.input`: request lookup path, such as `target.id`,
+  `target.identifiers.<scheme>`, `target.attributes.<name>`, `requester.id`,
+  `requester.identifiers.<scheme>`, `requester.attributes.<name>`, or
+  `relationship.attributes.<name>`.
 - `lookup.field`: upstream identifier field.
 - `lookup.cardinality`: use `one` when the claim needs exactly one record.
 - `fields`: only fields needed by the rule.
@@ -326,8 +329,7 @@ deployment's policy review, source-owner agreement, and audit review.
 - Credential issuance is explicitly allowed by both claim and profile.
 - Batch and bulk modes are disabled until source contracts are tested.
 - OpenFn sidecars normalize data only and do not decide claims.
-- `doctor --live --subject-id <test-subject>` passes against a controlled test
-  subject.
+- `doctor --live` passes against a controlled test target.
 
 ## Testing With Doctor
 
@@ -337,16 +339,14 @@ Run non-live checks first:
 registry-notary doctor --config registry-notary.yaml
 ```
 
-Then run a live probe only with a controlled test subject:
+Then run a live probe only with a controlled test target:
 
 ```sh
 registry-notary doctor \
   --config registry-notary.yaml \
-  --live \
-  --subject-id 1234567890 \
-  --subject-id-type UIN
+  --live
 ```
 
-Live doctor probes contact the upstream source. Use test data, document the
+Live doctor probes can contact the upstream source. Use test data, document the
 purpose with the source owner, and keep probe output out of screenshots or
 support tickets unless it has been reviewed for disclosure.

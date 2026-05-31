@@ -19,7 +19,7 @@ use registry_notary_core::{
     AccessMode, BatchEvaluateRequest, BatchSubjectRequest, ClaimDefinition, ClaimOperationsConfig,
     ClaimRef, ClaimValueConfig, ConcurrencyConfig, DisclosureConfig, EvidenceConfig, EvidenceError,
     EvidencePrincipal, RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig,
-    SourceLookupConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    SourceLookupConfig, SourceMatchingConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
@@ -89,6 +89,7 @@ fn evaluate_claim() -> ClaimDefinition {
                     semantic_term: None,
                 },
             )]),
+            matching: SourceMatchingConfig::default(),
         },
     );
     ClaimDefinition {
@@ -161,17 +162,19 @@ async fn owner_panic_does_not_deadlock_waiters() {
     let store = EvidenceStore::default();
     let runtime = RegistryNotaryRuntime::new();
     let request = BatchEvaluateRequest {
-        subjects: vec![
+        items: vec![
             BatchSubjectRequest {
                 id: "shared-id".to_string(),
                 id_type: None,
                 purpose: None,
-            },
+            }
+            .into(),
             BatchSubjectRequest {
                 id: "shared-id".to_string(),
                 id_type: None,
                 purpose: None,
-            },
+            }
+            .into(),
         ],
         claims: vec![ClaimRef::from("claim")],
         disclosure: Some("value".to_string()),

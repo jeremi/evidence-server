@@ -11,6 +11,9 @@ guides, tutorials, SDK docs, and release notes stay in `docs/`.
 - [`federated-notary-manifest-spec.md`](federated-notary-manifest-spec.md):
   manifest-backed federation, trust, delegated evaluation, credential issuance,
   and audit checkpoint design.
+- [`evidence-request-subject-model-spec.md`](evidence-request-subject-model-spec.md):
+  breaking evaluation request model for requester, target, relationship,
+  provider-side matching, and non-person evidence subjects.
 - [`notary-api-v1-route-cleanup-proposal.md`](notary-api-v1-route-cleanup-proposal.md):
   implemented route cleanup design record for the stable `/v1` REST API
   surface.

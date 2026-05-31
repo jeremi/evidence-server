@@ -32,7 +32,7 @@ pub enum NotaryClientBuildError {
     UnsupportedIdempotencyKey,
 }
 
-/// RFC 7807-style Problem Details emitted by Registry Notary.
+/// RFC 9457 Problem Details emitted by Registry Notary.
 ///
 /// The server may include sensitive details such as subject identifiers or
 /// source-field names in `detail`. `Debug`, `Display`, and portable errors do
