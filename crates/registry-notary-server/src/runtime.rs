@@ -1183,10 +1183,9 @@ impl RegistryNotaryRuntime {
             resolve_batch_default_purpose(options.header_purpose, request.purpose.as_deref())?;
         let subject_purposes =
             resolve_batch_subject_purposes(&request.items, batch_purpose.as_deref())?;
-        for (item, purpose) in request.items.iter().zip(&subject_purposes) {
-            if !item.target.has_matching_input() {
-                return Err(EvidenceError::TargetAttributesInsufficient);
-            }
+        let unique_purposes =
+            validate_batch_inputs_and_collect_purposes(&request.items, &subject_purposes)?;
+        for purpose in unique_purposes {
             require_purpose_allowed(&evidence, &request.claims, &claim_versions, purpose)?;
         }
         let batch_id = Ulid::new().to_string();
@@ -2027,6 +2026,20 @@ fn resolve_batch_subject_purposes(
                 .ok_or(EvidenceError::PurposeRequired),
         })
         .collect()
+}
+
+fn validate_batch_inputs_and_collect_purposes<'a>(
+    subjects: &'a [registry_notary_core::BatchEvaluateItemRequest],
+    subject_purposes: &'a [String],
+) -> Result<BTreeSet<&'a str>, EvidenceError> {
+    let mut unique_purposes = BTreeSet::new();
+    for (item, purpose) in subjects.iter().zip(subject_purposes) {
+        if !item.target.has_matching_input() {
+            return Err(EvidenceError::TargetAttributesInsufficient);
+        }
+        unique_purposes.insert(purpose.as_str());
+    }
+    Ok(unique_purposes)
 }
 
 fn require_purpose_allowed(
@@ -3854,6 +3867,43 @@ mod tests {
         .expect_err("conflicting versions are rejected");
 
         assert!(matches!(err, EvidenceError::InvalidRequest));
+    }
+
+    #[test]
+    fn batch_input_validation_deduplicates_purposes() {
+        let subjects = vec![
+            registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "person-1".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            ),
+            registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "person-2".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            ),
+            registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "person-3".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            ),
+        ];
+        let purposes = vec![
+            "benefits".to_string(),
+            "benefits".to_string(),
+            "appeals".to_string(),
+        ];
+
+        let unique = validate_batch_inputs_and_collect_purposes(&subjects, &purposes)
+            .expect("batch inputs are valid");
+
+        assert_eq!(unique, BTreeSet::from(["appeals", "benefits"]));
     }
 
     #[tokio::test]

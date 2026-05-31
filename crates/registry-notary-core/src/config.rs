@@ -87,7 +87,7 @@ impl StandaloneRegistryNotaryConfig {
             .iter()
             .any(|purpose| purpose.trim().is_empty())
         {
-            return Err(EvidenceConfigError::InvalidClaim);
+            return Err(EvidenceConfigError::InvalidPurpose);
         }
         self.credential_status.validate()?;
         for (connection_id, connection) in &self.evidence.source_connections {
@@ -2507,6 +2507,8 @@ pub enum EvidenceConfigError {
     InvalidSourceAuthConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
+    #[error("allowed purpose must not be empty")]
+    InvalidPurpose,
     #[error("claim '{claim}' binding '{binding}' has invalid matching config: {reason}")]
     InvalidMatchingConfig {
         claim: String,
@@ -5509,7 +5511,7 @@ allowed_claims: ["", "   "]
             .validate()
             .expect_err("blank evidence allowed_purposes must fail validation");
 
-        assert!(matches!(err, EvidenceConfigError::InvalidClaim));
+        assert!(matches!(err, EvidenceConfigError::InvalidPurpose));
     }
 
     #[test]
