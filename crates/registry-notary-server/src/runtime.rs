@@ -342,13 +342,7 @@ pub trait SourceReader: Send + Sync {
         bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut results = Vec::with_capacity(bindings.len());
-            for (binding, context) in bindings {
-                results.push(self.read_one_for_context(&binding, &context, purpose).await);
-            }
-            results
-        })
+        Box::pin(default_read_many_context(self, bindings, purpose))
     }
 
     #[allow(clippy::type_complexity)]
@@ -594,6 +588,63 @@ async fn default_read_many<'a, R: SourceReader + ?Sized>(
     })
     .await;
     // Drop futures before `owned` to satisfy borrow-checker drop order.
+    drop(futures);
+    drop(owned);
+    results
+        .into_iter()
+        .map(|slot| slot.expect("every slot populated when poll_fn returns Ready"))
+        .collect()
+}
+
+/// Default context-aware `read_many` implementation: drive
+/// `read_one_for_context` futures concurrently and collect results in input
+/// order. This mirrors `default_read_many` without converting the canonical
+/// request context back to the old subject-only shape.
+async fn default_read_many_context<'a, R: SourceReader + ?Sized>(
+    reader: &'a R,
+    bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)>,
+    purpose: &'a str,
+) -> Vec<Result<Value, EvidenceError>> {
+    use std::task::{Context, Poll};
+
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+
+    let owned: Vec<(SourceBindingConfig, EvidenceRequestContext)> = bindings;
+    let len = owned.len();
+    let slice: &[(SourceBindingConfig, EvidenceRequestContext)] = owned.as_slice();
+    #[allow(clippy::type_complexity)]
+    let mut futures: Vec<
+        Option<Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + '_>>>,
+    > = Vec::with_capacity(len);
+    for (binding, context) in slice.iter() {
+        futures.push(Some(reader.read_one_for_context(binding, context, purpose)));
+    }
+    let mut results: Vec<Option<Result<Value, EvidenceError>>> = (0..len).map(|_| None).collect();
+
+    std::future::poll_fn(|cx: &mut Context<'_>| {
+        let mut all_done = true;
+        for (idx, slot) in futures.iter_mut().enumerate() {
+            if let Some(fut) = slot.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        results[idx] = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => {
+                        all_done = false;
+                    }
+                }
+            }
+        }
+        if all_done {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
     drop(futures);
     drop(owned);
     results
@@ -2366,10 +2417,6 @@ fn binding_lookup_value_for_context(
     }
     match context.lookup_value(binding.lookup.input.as_str()) {
         Some(value) => Ok(value),
-        None if matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id") => context
-            .target_subject()
-            .map(|subject| Value::String(subject.id))
-            .ok_or(EvidenceError::TargetAttributesInsufficient),
         None => Err(missing_context_error(binding.lookup.input.as_str())),
     }
 }
@@ -2478,19 +2525,19 @@ fn minimized_context_for_binding(
             paths.insert(path.clone());
         }
     }
-    if !binding.matching.allowed_target_inputs.is_empty() {
-        for path in present_entity_paths("target", &context.target) {
-            if path_allowed(path.as_str(), &binding.matching.allowed_target_inputs) {
-                paths.insert(path);
-            }
+    for path in present_entity_paths("target", &context.target) {
+        if binding.matching.allowed_target_inputs.is_empty()
+            || path_allowed(path.as_str(), &binding.matching.allowed_target_inputs)
+        {
+            paths.insert(path);
         }
     }
-    if !binding.matching.allowed_requester_inputs.is_empty() {
-        if let Some(requester) = &context.requester {
-            for path in present_entity_paths("requester", requester) {
-                if path_allowed(path.as_str(), &binding.matching.allowed_requester_inputs) {
-                    paths.insert(path);
-                }
+    if let Some(requester) = &context.requester {
+        for path in present_entity_paths("requester", requester) {
+            if binding.matching.allowed_requester_inputs.is_empty()
+                || path_allowed(path.as_str(), &binding.matching.allowed_requester_inputs)
+            {
+                paths.insert(path);
             }
         }
     }
@@ -2534,16 +2581,8 @@ fn minimized_entity(
 ) -> Option<EvidenceEntity> {
     let mut minimized = EvidenceEntity::new(entity.entity_type.clone());
     let id_path = format!("{prefix}.id");
-    if paths.contains(&id_path)
-        || (prefix == "target" && paths.contains("subject.id"))
-        || (prefix == "target" && paths.contains("subject_id"))
-    {
+    if paths.contains(&id_path) {
         minimized.id = entity.id.clone();
-        if minimized.id.is_none() && prefix == "target" {
-            if let Some(identifier) = entity.identifiers.first() {
-                minimized.identifiers.push(identifier.clone());
-            }
-        }
     }
     for identifier in &entity.identifiers {
         let path = format!("{prefix}.identifiers.{}", identifier.scheme);
@@ -3168,7 +3207,7 @@ mod tests {
             dataset: "people".to_string(),
             entity: "person".to_string(),
             lookup: registry_notary_core::SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),

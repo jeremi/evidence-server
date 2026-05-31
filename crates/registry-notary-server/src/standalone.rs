@@ -860,28 +860,10 @@ impl SourceReader for HttpEvidenceSources {
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
         Box::pin(async move {
-            if bindings.iter().all(|(binding, context)| {
-                matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id")
-                    && context.target_subject().is_some()
-                    && context.requester.is_none()
-                    && context.relationship.is_none()
-                    && context.on_behalf_of.is_none()
-            }) {
-                let legacy_bindings: Vec<(SourceBindingConfig, SubjectRequest)> = bindings
-                    .iter()
-                    .filter_map(|(binding, context)| {
-                        context
-                            .target_subject()
-                            .map(|subject| (binding.clone(), subject))
-                    })
-                    .collect();
-                return self.read_many(legacy_bindings, purpose).await;
+            if let Some(subject_bindings) = canonical_subject_bindings(&bindings) {
+                return self.read_many(subject_bindings, purpose).await;
             }
-            let mut results = Vec::with_capacity(bindings.len());
-            for (binding, context) in bindings {
-                results.push(self.read_one_for_context(&binding, &context, purpose).await);
-            }
-            results
+            fallback_concurrent_read_one_for_context(self, &bindings, purpose).await
         })
     }
 
@@ -916,6 +898,52 @@ async fn fallback_concurrent_read_one(
     > = bindings
         .iter()
         .map(|(binding, subject)| Some(sources.read_one(binding, subject, purpose)))
+        .collect();
+    let mut results: Vec<Option<Result<Value, EvidenceError>>> =
+        (0..futures.len()).map(|_| None).collect();
+    std::future::poll_fn(move |cx: &mut Context<'_>| {
+        let mut all_done = true;
+        for (idx, slot) in futures.iter_mut().enumerate() {
+            if let Some(fut) = slot.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        results[idx] = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => {
+                        all_done = false;
+                    }
+                }
+            }
+        }
+        if all_done {
+            Poll::Ready(std::mem::take(&mut results))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+    .into_iter()
+    .map(|slot| slot.expect("every slot populated"))
+    .collect()
+}
+
+async fn fallback_concurrent_read_one_for_context(
+    sources: &HttpEvidenceSources,
+    bindings: &[(SourceBindingConfig, EvidenceRequestContext)],
+    purpose: &str,
+) -> Vec<Result<Value, EvidenceError>> {
+    use std::task::{Context, Poll};
+
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    #[allow(clippy::type_complexity)]
+    let mut futures: Vec<
+        Option<Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + '_>>>,
+    > = bindings
+        .iter()
+        .map(|(binding, context)| Some(sources.read_one_for_context(binding, context, purpose)))
         .collect();
     let mut results: Vec<Option<Result<Value, EvidenceError>>> =
         (0..futures.len()).map(|_| None).collect();
@@ -3618,7 +3646,13 @@ fn lookup_value(
         return Err(EvidenceError::InvalidRequest);
     }
     match binding.lookup.input.as_str() {
-        "subject_id" | "subject.id" => Ok(Value::String(subject.id.clone())),
+        "target.id" if subject.id_type.is_none() => Ok(Value::String(subject.id.clone())),
+        input
+            if input.starts_with("target.identifiers.")
+                && subject.id_type.as_deref() == input.strip_prefix("target.identifiers.") =>
+        {
+            Ok(Value::String(subject.id.clone()))
+        }
         _ => Err(EvidenceError::InvalidRequest),
     }
 }
@@ -3632,12 +3666,32 @@ fn lookup_value_for_context(
     }
     match context.lookup_value(binding.lookup.input.as_str()) {
         Some(value) => Ok(value),
-        None if matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id") => context
-            .target_subject()
-            .map(|subject| Value::String(subject.id))
-            .ok_or(EvidenceError::TargetAttributesInsufficient),
         None => Err(missing_context_lookup_error(binding.lookup.input.as_str())),
     }
+}
+
+fn canonical_subject_bindings(
+    bindings: &[(SourceBindingConfig, EvidenceRequestContext)],
+) -> Option<Vec<(SourceBindingConfig, SubjectRequest)>> {
+    let mut subject_bindings = Vec::with_capacity(bindings.len());
+    for (binding, context) in bindings {
+        if context.requester.is_some()
+            || context.relationship.is_some()
+            || context.on_behalf_of.is_some()
+        {
+            return None;
+        }
+        let subject = context.target_subject()?;
+        match binding.lookup.input.as_str() {
+            "target.id" if subject.id_type.is_none() => {}
+            input
+                if input.starts_with("target.identifiers.")
+                    && subject.id_type.as_deref() == input.strip_prefix("target.identifiers.") => {}
+            _ => return None,
+        }
+        subject_bindings.push((binding.clone(), subject));
+    }
+    Some(subject_bindings)
 }
 
 fn missing_context_lookup_error(path: &str) -> EvidenceError {
@@ -4337,7 +4391,7 @@ credential_profiles:
             dataset: dataset.to_string(),
             entity: entity.to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
@@ -4398,7 +4452,7 @@ claims:
         dataset: civil_registry
         entity: civil_person
         lookup:
-          input: subject_id
+          input: target.id
           field: national_id
           op: eq
           cardinality: one

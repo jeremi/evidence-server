@@ -175,7 +175,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one
@@ -289,7 +289,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one

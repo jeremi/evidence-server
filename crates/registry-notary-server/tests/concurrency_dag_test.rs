@@ -156,7 +156,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
                 dataset: "ds".to_string(),
                 entity: entity.to_string(),
                 lookup: SourceLookupConfig {
-                    input: "subject_id".to_string(),
+                    input: "target.id".to_string(),
                     field: "id".to_string(),
                     op: "eq".to_string(),
                     cardinality: "one".to_string(),
@@ -216,7 +216,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
             dataset: "ds".to_string(),
             entity: entity.to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),

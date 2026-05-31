@@ -133,7 +133,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
           fields:
             deceased:
@@ -162,7 +162,7 @@ evidence:
           dataset: social_protection_registry
           entity: program_enrollment
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
           fields:
             enrollment_status:

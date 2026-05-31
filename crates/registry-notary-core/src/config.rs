@@ -3765,7 +3765,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -5225,7 +5225,7 @@ source_auth:
             dataset: "farmer_registry".to_string(),
             entity: "farmer".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: cardinality.to_string(),
@@ -5243,7 +5243,7 @@ source_auth:
             dataset: "farmer_registry".to_string(),
             entity: "farmer".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id_type".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),

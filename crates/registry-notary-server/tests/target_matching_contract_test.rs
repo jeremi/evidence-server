@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BatchOperationConfig,
@@ -89,6 +90,45 @@ impl ContextRecordingSource {
             .expect("seen context mutex is not poisoned")
             .clone()
             .expect("source received a context")
+    }
+}
+
+#[derive(Debug)]
+struct DelayedContextSource;
+
+impl SourceReader for DelayedContextSource {
+    fn read_one<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        _subject: &'a SubjectRequest,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async { Err(EvidenceError::TargetAttributesInsufficient) })
+    }
+
+    fn read_one_for_context<'a>(
+        &'a self,
+        _binding: &'a SourceBindingConfig,
+        context: &'a EvidenceRequestContext,
+        _purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let id = context
+                .target
+                .id
+                .as_deref()
+                .ok_or(EvidenceError::TargetAttributesInsufficient)?;
+            Ok(json!({ "id": id }))
+        })
+    }
+
+    fn required_scopes(
+        &self,
+        _evidence: &EvidenceConfig,
+        _claim_id: &str,
+    ) -> Result<Vec<String>, EvidenceError> {
+        Ok(Vec::new())
     }
 }
 
@@ -491,7 +531,7 @@ async fn attribute_only_targets_get_distinct_opaque_handles() {
 }
 
 #[tokio::test]
-async fn adapter_receives_minimized_context_when_matching_inputs_are_configured() {
+async fn adapter_receives_unrestricted_context_when_allowed_inputs_are_empty() {
     let runtime = RegistryNotaryRuntime::new();
     let mut claim = person_claim();
     let matching = &mut claim
@@ -526,9 +566,101 @@ async fn adapter_receives_minimized_context_when_matching_inputs_are_configured(
     assert!(seen.target.attributes.contains_key("given_name"));
     assert!(seen.target.attributes.contains_key("family_name"));
     assert!(seen.target.attributes.contains_key("birthdate"));
-    assert!(!seen.target.attributes.contains_key("private_note"));
+    assert!(seen.target.attributes.contains_key("private_note"));
     assert!(seen.requester.is_none());
     assert!(seen.on_behalf_of.is_none());
+}
+
+#[tokio::test]
+async fn adapter_receives_minimized_context_when_allowed_inputs_are_configured() {
+    let runtime = RegistryNotaryRuntime::new();
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.allowed_target_inputs = vec![
+        "target.attributes.given_name".to_string(),
+        "target.attributes.family_name".to_string(),
+        "target.attributes.birthdate".to_string(),
+    ];
+
+    let source = Arc::new(ContextRecordingSource::new());
+    let target = person_target("Amina", "Diallo", Some("1984-02-10"));
+
+    runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(target, "person-is-alive"),
+            None,
+        )
+        .await
+        .expect("evaluation succeeds with minimized adapter context");
+
+    let seen = source.seen();
+    assert_eq!(seen.target.entity_type, "Person");
+    assert!(seen.target.attributes.contains_key("given_name"));
+    assert!(seen.target.attributes.contains_key("family_name"));
+    assert!(seen.target.attributes.contains_key("birthdate"));
+    assert_eq!(seen.target.attributes.len(), 3);
+}
+
+#[tokio::test]
+async fn default_context_batch_read_runs_concurrently_and_preserves_order() {
+    let source = DelayedContextSource;
+    let binding = SourceBindingConfig {
+        connector: SourceConnectorKind::RegistryDataApi,
+        connection: None,
+        required_scope: None,
+        dataset: "people".to_string(),
+        entity: "person".to_string(),
+        lookup: SourceLookupConfig {
+            input: "target.id".to_string(),
+            field: "id".to_string(),
+            op: "eq".to_string(),
+            cardinality: "one".to_string(),
+        },
+        fields: BTreeMap::new(),
+        matching: SourceMatchingConfig::default(),
+    };
+    let bindings: Vec<(SourceBindingConfig, EvidenceRequestContext)> = (0..4)
+        .map(|idx| {
+            let mut target = EvidenceEntity::new("Person");
+            target.id = Some(format!("p-{idx}"));
+            (
+                binding.clone(),
+                EvidenceRequestContext {
+                    requester: None,
+                    target,
+                    relationship: None,
+                    on_behalf_of: None,
+                },
+            )
+        })
+        .collect();
+
+    let started = Instant::now();
+    let results = source.read_many_context(bindings, "benefits").await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(160),
+        "four 50ms context reads should overlap; elapsed={elapsed:?}"
+    );
+    let ids: Vec<String> = results
+        .into_iter()
+        .map(|result| {
+            result.expect("read succeeds")["id"]
+                .as_str()
+                .expect("id is a string")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(ids, vec!["p-0", "p-1", "p-2", "p-3"]);
 }
 
 #[tokio::test]

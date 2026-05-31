@@ -309,7 +309,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -430,6 +430,17 @@ fn federation_config_for(
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
     let mut config = registry_data_api_config(base_url, audit_path);
+    config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists")
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer binding exists")
+        .lookup
+        .input = "target.identifiers.national_id".to_string();
     config.evidence.signing_keys.insert(
         "federation-key".to_string(),
         SigningKeyConfig {
@@ -702,7 +713,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one
@@ -856,7 +867,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one

@@ -632,7 +632,7 @@ impl EvidenceRequestContext {
     #[must_use]
     pub fn lookup_value(&self, path: &str) -> Option<Value> {
         match path {
-            "subject_id" | "subject.id" | "target.id" => self
+            "target.id" => self
                 .target
                 .id
                 .as_ref()

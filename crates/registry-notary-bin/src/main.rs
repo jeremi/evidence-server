@@ -1566,7 +1566,7 @@ evidence:
           dataset: registry_records
           entity: record
           lookup:
-            input: subject_id
+            input: target.id
             field: {lookup_field}
             op: eq
             cardinality: one
@@ -2378,7 +2378,7 @@ evidence:
           dataset: registry_records
           entity: record
           lookup:
-            input: subject_id
+            input: target.id
             field: SUBJECT_ID
             op: eq
             cardinality: one

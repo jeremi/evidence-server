@@ -74,7 +74,7 @@ fn evaluate_claim() -> ClaimDefinition {
             dataset: "ds".to_string(),
             entity: "ent".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
