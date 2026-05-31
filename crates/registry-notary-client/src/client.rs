@@ -463,7 +463,9 @@ impl RegistryNotaryClient {
         options.accept = options
             .accept
             .or_else(|| Some(FORMAT_CLAIM_RESULT_JSON.to_string()));
-        request.purpose = options.purpose.clone();
+        if request.purpose.is_none() {
+            request.purpose = options.purpose.clone();
+        }
         let mut request = request;
         if request.format.is_none() {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
@@ -493,7 +495,9 @@ impl RegistryNotaryClient {
         options.accept = options
             .accept
             .or_else(|| Some(FORMAT_CLAIM_RESULT_JSON.to_string()));
-        request.purpose = options.purpose.clone();
+        if request.purpose.is_none() {
+            request.purpose = options.purpose.clone();
+        }
         if request.format.is_none() {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
         }
@@ -877,7 +881,10 @@ impl RegistryNotaryClient {
         body_purpose: Option<&str>,
     ) -> Result<RequestOptions, NotaryClientBuildError> {
         if options.purpose.is_none() {
-            options.purpose = self.default_purpose.clone();
+            options.purpose = self
+                .default_purpose
+                .clone()
+                .or_else(|| body_purpose.map(ToOwned::to_owned));
         }
         if let (Some(header), Some(body)) = (options.purpose.as_deref(), body_purpose) {
             if header != body {

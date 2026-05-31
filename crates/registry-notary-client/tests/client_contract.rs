@@ -474,6 +474,73 @@ async fn purpose_conflict_fails_client_side() {
 }
 
 #[tokio::test]
+async fn raw_evaluate_preserves_body_only_purpose() {
+    let app = Router::new().route("/v1/evaluations", post(body_purpose_evaluate_handler));
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .bearer_token("bearer-secret")
+        .build()
+        .expect("client builds");
+
+    let response = client
+        .evaluate_request(
+            registry_notary_core::EvaluateRequest {
+                requester: None,
+                target: registry_notary_core::EvidenceEntity::from_subject_request(
+                    "Person",
+                    registry_notary_core::SubjectRequest {
+                        id: "subject-1".to_string(),
+                        id_type: None,
+                    },
+                ),
+                relationship: None,
+                on_behalf_of: None,
+                claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
+                disclosure: None,
+                format: None,
+                purpose: Some("body-purpose".to_string()),
+            },
+            RequestOptions::default(),
+        )
+        .await
+        .expect("evaluate succeeds");
+
+    assert!(response.body.results.is_empty());
+}
+
+#[tokio::test]
+async fn raw_batch_preserves_body_only_purpose() {
+    let app = Router::new().route("/v1/batch-evaluations", post(body_purpose_batch_handler));
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .bearer_token("bearer-secret")
+        .build()
+        .expect("client builds");
+
+    let response = client
+        .batch_evaluate_request(
+            registry_notary_core::BatchEvaluateRequest {
+                items: vec![registry_notary_core::BatchEvaluateItemRequest::from(
+                    registry_notary_core::BatchSubjectRequest {
+                        id: "subject-1".to_string(),
+                        id_type: None,
+                        purpose: None,
+                    },
+                )],
+                claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
+                disclosure: None,
+                format: None,
+                purpose: Some("body-purpose".to_string()),
+            },
+            RequestOptions::default(),
+        )
+        .await
+        .expect("batch evaluate succeeds");
+
+    assert_eq!(response.body.batch_id, "batch-1");
+}
+
+#[tokio::test]
 async fn idempotency_is_rejected_on_routes_that_ignore_it() {
     let app = Router::new().route(
         "/v1/evaluations/{evaluation_id}/render",
@@ -915,6 +982,51 @@ async fn evaluate_handler(headers: HeaderMap, body: Bytes) -> Response {
         Json(json!({ "results": [] })),
     )
         .into_response()
+}
+
+async fn body_purpose_evaluate_handler(headers: HeaderMap, body: Bytes) -> Response {
+    assert_eq!(
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer bearer-secret")
+    );
+    assert_eq!(
+        headers
+            .get("data-purpose")
+            .and_then(|value| value.to_str().ok()),
+        Some("body-purpose")
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("body parses");
+    assert_eq!(parsed["purpose"], json!("body-purpose"));
+    assert_eq!(parsed["format"], json!(FORMAT_CLAIM_RESULT_JSON));
+    Json(json!({ "results": [] })).into_response()
+}
+
+async fn body_purpose_batch_handler(headers: HeaderMap, body: Bytes) -> Response {
+    assert_eq!(
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer bearer-secret")
+    );
+    assert_eq!(
+        headers
+            .get("data-purpose")
+            .and_then(|value| value.to_str().ok()),
+        Some("body-purpose")
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("body parses");
+    assert_eq!(parsed["purpose"], json!("body-purpose"));
+    assert_eq!(parsed["format"], json!(FORMAT_CLAIM_RESULT_JSON));
+    Json(json!({
+        "batch_id": "batch-1",
+        "status": "completed",
+        "claims": ["claim-a"],
+        "items": [],
+        "summary": { "succeeded": 0, "failed": 0 }
+    }))
+    .into_response()
 }
 
 async fn health_handler() -> Response {

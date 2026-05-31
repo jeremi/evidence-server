@@ -81,6 +81,14 @@ impl StandaloneRegistryNotaryConfig {
                 max_validity_seconds: 600,
             });
         }
+        if self
+            .evidence
+            .allowed_purposes
+            .iter()
+            .any(|purpose| purpose.trim().is_empty())
+        {
+            return Err(EvidenceConfigError::InvalidClaim);
+        }
         self.credential_status.validate()?;
         for (connection_id, connection) in &self.evidence.source_connections {
             if connection.max_in_flight < 1 {
@@ -2627,6 +2635,8 @@ pub struct EvidenceConfig {
     pub inline_batch_limit: usize,
     #[serde(default = "default_max_credential_validity_seconds")]
     pub max_credential_validity_seconds: u64,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
     #[serde(default)]
     pub claims: Vec<ClaimDefinition>,
     #[serde(default)]
@@ -5488,6 +5498,18 @@ allowed_claims: ["", "   "]
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn blank_evidence_allowed_purpose_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.allowed_purposes = vec!["benefits".to_string(), "  ".to_string()];
+
+        let err = config
+            .validate()
+            .expect_err("blank evidence allowed_purposes must fail validation");
+
+        assert!(matches!(err, EvidenceConfigError::InvalidClaim));
     }
 
     #[test]

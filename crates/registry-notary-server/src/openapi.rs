@@ -1805,7 +1805,8 @@ fn problem_details_schema() -> Value {
             "title": { "type": "string" },
             "status": { "type": "integer", "format": "int32" },
             "detail": { "type": "string" },
-            "code": { "type": "string" }
+            "code": { "type": "string" },
+            "request_id": { "type": "string" }
         },
         "additionalProperties": true
     })
@@ -2559,6 +2560,15 @@ mod tests {
         assert!(batch_item_example.get("target_ref").is_some());
         assert!(batch_item_example.get("requester_ref").is_some());
         assert!(batch_item_example.get("matching").is_some());
+
+        let evaluate_request = &doc["components"]["schemas"]["EvaluateRequest"]["properties"];
+        assert!(evaluate_request.get("subject").is_none());
+        assert!(evaluate_request.get("id_type").is_none());
+        assert!(evaluate_request.get("target").is_some());
+
+        let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
+        assert!(batch_request.get("subjects").is_none());
+        assert!(batch_request.get("items").is_some());
     }
 
     #[test]

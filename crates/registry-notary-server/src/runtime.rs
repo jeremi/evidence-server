@@ -1043,6 +1043,9 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        if !request.target.has_matching_input() {
+            return Err(EvidenceError::TargetAttributesInsufficient);
+        }
         let claim_versions = requested_claim_versions(&request.claims)?;
         let request_claim_ids = claim_ids(&request.claims);
         for claim_id in &request.claims {
@@ -1052,6 +1055,12 @@ impl RegistryNotaryRuntime {
             require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
         }
         let purpose = resolve_purpose(header_purpose, request.purpose.as_deref())?;
+        require_purpose_allowed(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            purpose.as_str(),
+        )?;
         let format = request
             .format
             .clone()
@@ -1168,6 +1177,12 @@ impl RegistryNotaryRuntime {
             resolve_batch_default_purpose(options.header_purpose, request.purpose.as_deref())?;
         let subject_purposes =
             resolve_batch_subject_purposes(&request.items, batch_purpose.as_deref())?;
+        for (item, purpose) in request.items.iter().zip(&subject_purposes) {
+            if !item.target.has_matching_input() {
+                return Err(EvidenceError::TargetAttributesInsufficient);
+            }
+            require_purpose_allowed(&evidence, &request.claims, &claim_versions, purpose)?;
+        }
         let batch_id = Ulid::new().to_string();
         let claims = request_claim_ids.clone();
         let subject_count = request.items.len();
@@ -2006,6 +2021,33 @@ fn resolve_batch_subject_purposes(
         .collect()
 }
 
+fn require_purpose_allowed(
+    config: &EvidenceConfig,
+    claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
+    purpose: &str,
+) -> Result<(), EvidenceError> {
+    if !config.allowed_purposes.is_empty()
+        && !config
+            .allowed_purposes
+            .iter()
+            .any(|allowed| allowed == purpose)
+    {
+        return Err(EvidenceError::PurposeNotAllowed);
+    }
+    for claim_ref in claims {
+        let claim = find_claim_for_selection(config, claim_ref, claim_versions)?;
+        if claim
+            .purpose
+            .as_deref()
+            .is_some_and(|allowed| allowed != purpose)
+        {
+            return Err(EvidenceError::PurposeNotAllowed);
+        }
+    }
+    Ok(())
+}
+
 fn require_claim_format(
     evidence: &EvidenceConfig,
     claim_id: &str,
@@ -2436,6 +2478,14 @@ fn validate_matching_policy(
     {
         return Err(EvidenceError::ProfileUnsupported);
     }
+    if !matching.allowed_purposes.is_empty()
+        && !matching
+            .allowed_purposes
+            .iter()
+            .any(|allowed| allowed == purpose)
+    {
+        return Err(EvidenceError::PurposeNotAllowed);
+    }
     if let Some(target_type) = matching.target_type.as_deref() {
         if context.target.entity_type != target_type {
             return Err(EvidenceError::TargetMatchingPolicyRejected);
@@ -2453,14 +2503,6 @@ fn validate_matching_policy(
     }
     if matching.require_requester_reauthentication {
         return Err(EvidenceError::RequesterReauthenticationRequired);
-    }
-    if !matching.allowed_purposes.is_empty()
-        && !matching
-            .allowed_purposes
-            .iter()
-            .any(|allowed| allowed == purpose)
-    {
-        return Err(EvidenceError::PurposeNotAllowed);
     }
     if !matching.allowed_relationships.is_empty() {
         let relationship_type = context

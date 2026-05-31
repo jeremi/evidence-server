@@ -2965,9 +2965,19 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let response = server.get("/v1/claims").await;
+    let response = server
+        .get("/v1/claims")
+        .add_header("x-request-id", "req-auth-1")
+        .await;
 
     response.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req-auth-1")
+    );
     let content_type = response
         .headers()
         .get("content-type")
@@ -2976,6 +2986,7 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
         .expect("content-type is valid");
     assert!(content_type.starts_with("application/problem+json"));
     let body: Value = response.json();
+    assert_eq!(body["request_id"], json!("req-auth-1"));
     assert_eq!(body["status"], json!(401));
     assert_eq!(body["title"], json!("Missing credential"));
     assert_eq!(body["code"], json!("auth.missing_credential"));
@@ -3002,6 +3013,26 @@ async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_deta
     ))
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
+
+    let old_shape = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("x-request-id", "req-problem-1")
+        .add_header("content-type", "application/json")
+        .bytes(Bytes::from_static(
+            br#"{"subject":{"id":"person-1","id_type":"national_id"},"claims":["farmed-land-size"]}"#,
+        ))
+        .await;
+    assert_eq!(
+        old_shape
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req-problem-1")
+    );
+    let old_shape_body: Value = old_shape.json();
+    assert_eq!(old_shape_body["request_id"], json!("req-problem-1"));
+    assert_eq!(old_shape_body["code"], json!("request.invalid"));
 
     let old_shape = server
         .post("/v1/evaluations")

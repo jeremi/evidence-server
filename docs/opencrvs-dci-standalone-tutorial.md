@@ -229,7 +229,7 @@ registry-notary doctor \
   --config dci-notary.yaml \
   --env-file .env.local \
   --live \
-  --subject-id "$OPENCRVS_TEST_UIN"
+  --target-id "$OPENCRVS_TEST_UIN"
 ```
 
 The target identifier and source token must not appear in diagnostic output.

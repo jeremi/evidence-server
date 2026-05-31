@@ -762,6 +762,16 @@ impl EvidenceEntity {
             .find(|identifier| identifier.scheme == scheme)
             .map(|identifier| identifier.value.as_str())
     }
+
+    #[must_use]
+    pub fn has_matching_input(&self) -> bool {
+        self.id.as_ref().is_some_and(|id| !id.trim().is_empty())
+            || self
+                .identifiers
+                .iter()
+                .any(|identifier| !identifier.value.trim().is_empty())
+            || !self.attributes.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
@@ -1407,6 +1417,30 @@ mod tests {
                 || error.to_string().contains("unknown field `subject`"),
             "unexpected serde error: {error}"
         );
+    }
+
+    #[test]
+    fn evidence_entity_reports_matching_input_only_when_non_empty() {
+        let mut entity = EvidenceEntity::new("Person");
+        assert!(!entity.has_matching_input());
+
+        entity.id = Some("   ".to_string());
+        entity.identifiers.push(EvidenceIdentifier {
+            scheme: "national_id".to_string(),
+            value: "  ".to_string(),
+            issuer: None,
+            country: None,
+        });
+        assert!(!entity.has_matching_input());
+
+        entity.identifiers[0].value = "NID-1001".to_string();
+        assert!(entity.has_matching_input());
+
+        entity.identifiers[0].value = "  ".to_string();
+        entity
+            .attributes
+            .insert("district".to_string(), json!("north"));
+        assert!(entity.has_matching_input());
     }
 
     #[test]

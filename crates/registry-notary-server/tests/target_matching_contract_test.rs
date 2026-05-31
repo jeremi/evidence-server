@@ -262,6 +262,19 @@ fn evidence_config(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
     })
 }
 
+fn evidence_config_with_allowed_purposes(
+    claims: Vec<ClaimDefinition>,
+    allowed_purposes: Vec<String>,
+) -> Arc<EvidenceConfig> {
+    Arc::new(EvidenceConfig {
+        enabled: true,
+        inline_batch_limit: 20,
+        allowed_purposes,
+        claims,
+        ..EvidenceConfig::default()
+    })
+}
+
 fn person_claim() -> ClaimDefinition {
     claim(
         "person-is-alive",
@@ -811,19 +824,137 @@ async fn profile_gate_rejects_missing_inputs_and_disallowed_purpose_before_sourc
 }
 
 #[tokio::test]
+async fn purpose_rejection_precedes_matching_policy_rejection() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.target.entity_type = "Animal".to_string();
+    request.purpose = Some("marketing".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![person_claim()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("purpose gate wins over matching policy");
+
+    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn deployment_purpose_allow_list_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_purposes
+        .clear();
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.purpose = Some("marketing".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config_with_allowed_purposes(vec![claim], vec!["benefits".to_string()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("deployment purpose allow-list rejects request");
+
+    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn claim_purpose_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim.purpose = Some("benefits".to_string());
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_purposes
+        .clear();
+    let mut request = evaluate_request(
+        person_target("Amina", "Diallo", Some("1984-02-10")),
+        "person-is-alive",
+    );
+    request.purpose = Some("marketing".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            request,
+            None,
+        )
+        .await
+        .expect_err("claim purpose rejects request");
+
+    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn empty_target_is_rejected_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![person_claim()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            evaluate_request(EvidenceEntity::new("Person"), "person-is-alive"),
+            None,
+        )
+        .await
+        .expect_err("empty target has no matching input");
+
+    assert_eq!(error.code(), "target.attributes_insufficient");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
 async fn profile_gate_uses_specific_identifier_and_policy_problem_codes() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
+    let mut land_without_identifier = EvidenceEntity::new("LandParcel");
+    land_without_identifier
+        .attributes
+        .insert("district".to_string(), json!("north"));
     let missing_identifier = runtime
         .evaluate(
             evidence_config(vec![parcel_claim()]),
             source.clone(),
             &EvidenceStore::default(),
             &principal(),
-            evaluate_request(
-                EvidenceEntity::new("LandParcel"),
-                "land-parcel-is-registered",
-            ),
+            evaluate_request(land_without_identifier, "land-parcel-is-registered"),
             None,
         )
         .await
@@ -831,13 +962,17 @@ async fn profile_gate_uses_specific_identifier_and_policy_problem_codes() {
     assert_eq!(missing_identifier.code(), "target.identifier_missing");
     assert_eq!(source.reads(), 0);
 
+    let mut wrong_type_target = EvidenceEntity::new("Person");
+    wrong_type_target
+        .attributes
+        .insert("district".to_string(), json!("north"));
     let wrong_target_type = runtime
         .evaluate(
             evidence_config(vec![parcel_claim()]),
             source.clone(),
             &EvidenceStore::default(),
             &principal(),
-            evaluate_request(EvidenceEntity::new("Person"), "land-parcel-is-registered"),
+            evaluate_request(wrong_type_target, "land-parcel-is-registered"),
             None,
         )
         .await
@@ -1083,6 +1218,80 @@ async fn batch_supports_same_rich_item_model() {
     assert_eq!(response.summary.failed, 1);
     assert_eq!(response.items[0].target_ref.entity_type, "LandParcel");
     assert_eq!(response.items[1].errors[0].code, "target.not_found");
+}
+
+#[tokio::test]
+async fn batch_rejects_empty_item_target_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+
+    let error = runtime
+        .batch_evaluate(
+            evidence_config(vec![parcel_claim()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            BatchEvaluateRequest {
+                items: vec![BatchEvaluateItemRequest {
+                    requester: None,
+                    target: EvidenceEntity::new("LandParcel"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: Some("benefits".to_string()),
+                }],
+                claims: vec![ClaimRef::new("land-parcel-is-registered")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect_err("empty item target has no matching input");
+
+    assert_eq!(error.code(), "target.attributes_insufficient");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn batch_rejects_deployment_purpose_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = parcel_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_purposes
+        .clear();
+
+    let error = runtime
+        .batch_evaluate(
+            evidence_config_with_allowed_purposes(vec![claim], vec!["benefits".to_string()]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal(),
+            BatchEvaluateRequest {
+                items: vec![BatchEvaluateItemRequest {
+                    requester: None,
+                    target: land_target("PARCEL-8891"),
+                    relationship: None,
+                    on_behalf_of: None,
+                    purpose: Some("marketing".to_string()),
+                }],
+                claims: vec![ClaimRef::new("land-parcel-is-registered")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect_err("deployment purpose allow-list rejects batch");
+
+    assert_eq!(error.code(), "purpose.not_allowed");
+    assert_eq!(source.reads(), 0);
 }
 
 #[tokio::test]

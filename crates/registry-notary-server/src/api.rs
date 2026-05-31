@@ -3324,16 +3324,27 @@ fn attach_self_attestation_rate_limit_audit(
 }
 
 pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
+    let request_id = crate::standalone::current_request_correlation_id();
+    evidence_error_response_with_request_id(error, request_id.as_ref())
+}
+
+pub(crate) fn evidence_error_response_with_request_id(
+    error: EvidenceError,
+    request_id: Option<&BoundedCorrelationId>,
+) -> Response {
     let code = error.code().to_string();
     let audit_code = error.audit_code().to_string();
     let status = evidence_status(&error);
-    let body = json!({
+    let mut body = json!({
         "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('.', "/")),
         "title": evidence_title(&error),
         "status": status.as_u16(),
         "detail": evidence_detail(&error),
         "code": code,
     });
+    if let Some(request_id) = request_id {
+        body["request_id"] = json!(request_id.as_str());
+    }
     let mut response = (status, Json(body)).into_response();
     response
         .extensions_mut()
@@ -3342,6 +3353,11 @@ pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    if let Some(request_id) = request_id {
+        if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+    }
     response
 }
 

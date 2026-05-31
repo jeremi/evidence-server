@@ -84,6 +84,12 @@ where
     REQUEST_CORRELATION_ID.scope(correlation_id, future).await
 }
 
+pub(crate) fn current_request_correlation_id() -> Option<BoundedCorrelationId> {
+    REQUEST_CORRELATION_ID
+        .try_with(BoundedCorrelationId::clone)
+        .ok()
+}
+
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
@@ -1907,7 +1913,10 @@ async fn auth_audit_middleware(
     if let Err(rate_error) =
         maybe_rate_limit_invalid_token_before_auth(&state, &credentials, client_address.as_str())
     {
-        let mut response = crate::api::evidence_error_response(rate_error.evidence_error());
+        let mut response = crate::api::evidence_error_response_with_request_id(
+            rate_error.evidence_error(),
+            Some(&correlation_id),
+        );
         response.extensions_mut().insert(EvidenceAuditContext {
             verification_id: None,
             verification_decision: Some("auth_rate_limited".to_string()),
@@ -1953,7 +1962,10 @@ async fn auth_audit_middleware(
                 &credentials,
                 client_address.as_str(),
             ) {
-                let mut response = crate::api::evidence_error_response(rate_error.evidence_error());
+                let mut response = crate::api::evidence_error_response_with_request_id(
+                    rate_error.evidence_error(),
+                    Some(&correlation_id),
+                );
                 response.extensions_mut().insert(EvidenceAuditContext {
                     verification_id: None,
                     verification_decision: Some("auth_rate_limited".to_string()),
@@ -1991,7 +2003,8 @@ async fn auth_audit_middleware(
                 );
                 return emit_audit_or_error(&state, audit_event, response).await;
             }
-            let response = crate::api::evidence_error_response(error);
+            let response =
+                crate::api::evidence_error_response_with_request_id(error, Some(&correlation_id));
             let audit_event = build_audit_event(
                 None,
                 &state.audit.profile.key_hasher(),
