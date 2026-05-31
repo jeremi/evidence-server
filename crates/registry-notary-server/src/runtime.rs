@@ -3275,6 +3275,7 @@ mod tests {
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 registry_notary_core::SourceFieldConfig {

@@ -47,9 +47,11 @@ You need:
 - An OpenCRVS DCI OAuth client ID and client secret.
 - A known test UIN from the OpenCRVS environment owner.
 
-Build the binary when you do not already have one:
+From the `registry-notary` repository root, build the binary when you do not
+already have one:
 
 ```bash
+export REGISTRY_NOTARY_REPO="$PWD"
 cargo build --release -p registry-notary-bin
 export PATH="$PWD/target/release:$PATH"
 registry-notary --help
@@ -242,6 +244,115 @@ Expected result:
 The credential is a demo SD-JWT VC issued by Registry Notary from OpenCRVS
 evidence. It is not an OpenCRVS-issued credential.
 
+## Issue a birth-attributes credential
+
+Now issue a second credential from the same OpenCRVS record. This credential
+discloses the child's given name, family name, date of birth, and place of
+birth. Use it only when the relying party needs those attributes, because it
+exposes more personal data than the boolean existence credential.
+
+Copy the provided config into your demo folder:
+
+```bash
+cd "$HOME/opencrvs-notary-demo"
+cp "$REGISTRY_NOTARY_REPO/demo/config/opencrvs-dci-birth-attributes-registry-notary.yaml" \
+  ./opencrvs-birth-attributes-notary.yaml
+```
+
+The config uses these live-tested OpenCRVS record paths:
+
+```yaml
+field_paths:
+  child_given_name: /name/given_name
+  child_family_name: /name/surname
+  child_birth_date: /birth_date
+  child_place_of_birth: /birth_place
+```
+
+It models each attribute as an `extract` claim, then issues one SD-JWT VC
+profile named `opencrvs_birth_attributes_sd_jwt` that allows those claims.
+
+Run the checks:
+
+```bash
+registry-notary doctor \
+  --config opencrvs-birth-attributes-notary.yaml \
+  --env-file .env.local \
+  --live \
+  --target-id "$OPENCRVS_DEMO_SUBJECT_UIN"
+```
+
+Stop the first Registry Notary process, then start the attribute config:
+
+```bash
+registry-notary \
+  --config opencrvs-birth-attributes-notary.yaml \
+  --env-file .env.local
+```
+
+Evaluate and issue the attribute credential:
+
+```bash
+ATTRIBUTE_EVALUATION_ID="$(
+  curl -fsS http://127.0.0.1:4255/v1/evaluations \
+    -H "content-type: application/json" \
+    -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
+    -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
+    -d '{
+      "target": {
+        "type": "Person",
+        "identifiers": [
+          {
+            "scheme": "UIN",
+            "value": "'"$OPENCRVS_DEMO_SUBJECT_UIN"'",
+            "issuer": "opencrvs"
+          }
+        ]
+      },
+      "relationship": { "type": "service_delivery" },
+      "claims": [
+        "opencrvs-child-given-name",
+        "opencrvs-child-family-name",
+        "opencrvs-child-date-of-birth",
+        "opencrvs-child-place-of-birth"
+      ],
+      "disclosure": "value",
+      "format": "application/dc+sd-jwt"
+    }' | jq -r '.results[0].evaluation_id'
+)"
+
+curl -fsS http://127.0.0.1:4255/v1/credentials \
+  -H "content-type: application/json" \
+  -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
+  -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
+  -d '{
+    "evaluation_id": "'"$ATTRIBUTE_EVALUATION_ID"'",
+    "credential_profile": "opencrvs_birth_attributes_sd_jwt",
+    "claims": [
+      "opencrvs-child-given-name",
+      "opencrvs-child-family-name",
+      "opencrvs-child-date-of-birth",
+      "opencrvs-child-place-of-birth"
+    ],
+    "disclosure": "value",
+    "format": "application/dc+sd-jwt"
+  }' | jq '{
+    credential_profile,
+    format,
+    credential_present: (.credential != null)
+  }'
+```
+
+Expected result:
+
+```json
+{
+  "credential_profile": "opencrvs_birth_attributes_sd_jwt",
+  "format": "application/dc+sd-jwt",
+  "credential_present": true
+}
+```
+
 ## Optional: use name and date of birth instead of UIN
 
 If your OpenCRVS DCI environment supports expression search over birth-record
@@ -264,16 +375,16 @@ source_bindings:
       field: given_name
       op: eq
       cardinality: one
-  query_fields:
-    - input: target.attributes.given_name
-      field: given_name
-      op: eq
-    - input: target.attributes.family_name
-      field: surname
-      op: eq
-    - input: target.attributes.birthdate
-      field: birth_date
-      op: eq
+    query_fields:
+      - input: target.attributes.given_name
+        field: given_name
+        op: eq
+      - input: target.attributes.family_name
+        field: surname
+        op: eq
+      - input: target.attributes.birthdate
+        field: birth_date
+        op: eq
 ```
 
 The evaluation request uses attributes instead of identifiers:
@@ -308,6 +419,9 @@ Registry Relay endpoint instead of a DCI endpoint. Relay must allow filters on
 ## Current OpenCRVS boundaries
 
 - The tested DCI query shape is `idtype-value` with `query.type = UIN`.
+- The birth-attributes credential also uses UIN lookup. Its tested OpenCRVS
+  record paths are `/name/given_name`, `/name/surname`, `/birth_date`, and
+  `/birth_place`.
 - The demographic demo config uses DCI `expression` query fields for OpenCRVS
   deployments that expose first-name, last-name, and date-of-birth search. The
   Farajaland integration endpoint used for the UIN walkthrough does not yet

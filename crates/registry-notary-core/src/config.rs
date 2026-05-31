@@ -2858,9 +2858,20 @@ pub struct SourceBindingConfig {
     pub entity: String,
     pub lookup: SourceLookupConfig,
     #[serde(default)]
+    pub query_fields: Vec<SourceQueryFieldConfig>,
+    #[serde(default)]
     pub fields: BTreeMap<String, SourceFieldConfig>,
     #[serde(default)]
     pub matching: SourceMatchingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceQueryFieldConfig {
+    pub input: String,
+    pub field: String,
+    #[serde(default = "default_lookup_op")]
+    pub op: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -5242,6 +5253,7 @@ source_auth:
                 op: "eq".to_string(),
                 cardinality: cardinality.to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::new(),
             matching: SourceMatchingConfig::default(),
         }
@@ -5260,6 +5272,7 @@ source_auth:
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::new(),
             matching: SourceMatchingConfig::default(),
         }

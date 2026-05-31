@@ -20,7 +20,7 @@ For application and wallet developers calling the API or the SDKs.
 - [API reference](api-reference.md): the route-to-client-method matrix and the stable problem-code registry.
 - [Wallet interop with OID4VCI](oid4vci-wallet-interop.md): the OpenID4VCI wallet facade contract and compatibility checklist.
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md): the supported credential wire contract and the explicit non-support list.
-- [OpenCRVS DCI tutorial](opencrvs-dci-standalone-tutorial.md): issue a local demo SD-JWT VC from an OpenCRVS birth-record claim.
+- [OpenCRVS DCI tutorial](opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
 - [Scenario patterns](notary-scenario-patterns.md): reusable evaluation, federation, and issuance flows with sequence diagrams.
 
 ## Operate
