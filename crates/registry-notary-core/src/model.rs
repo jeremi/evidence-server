@@ -628,6 +628,54 @@ impl EvidenceRequestContext {
     pub fn target_subject(&self) -> Option<SubjectRequest> {
         self.target.to_subject_request()
     }
+
+    #[must_use]
+    pub fn lookup_value(&self, path: &str) -> Option<Value> {
+        match path {
+            "subject_id" | "subject.id" | "target.id" => self
+                .target
+                .id
+                .as_ref()
+                .map(|value| Value::String(value.clone())),
+            "requester.id" => self
+                .requester
+                .as_ref()
+                .and_then(|requester| requester.id.as_ref())
+                .map(|value| Value::String(value.clone())),
+            _ if path.starts_with("target.attributes.") => {
+                let key = path.strip_prefix("target.attributes.")?;
+                self.target.attributes.get(key).cloned()
+            }
+            _ if path.starts_with("requester.attributes.") => {
+                let key = path.strip_prefix("requester.attributes.")?;
+                self.requester
+                    .as_ref()
+                    .and_then(|requester| requester.attributes.get(key))
+                    .cloned()
+            }
+            _ if path.starts_with("relationship.attributes.") => {
+                let key = path.strip_prefix("relationship.attributes.")?;
+                self.relationship
+                    .as_ref()
+                    .and_then(|relationship| relationship.attributes.get(key))
+                    .cloned()
+            }
+            _ if path.starts_with("target.identifiers.") => {
+                let scheme = path.strip_prefix("target.identifiers.")?;
+                self.target
+                    .identifier_value(scheme)
+                    .map(|value| Value::String(value.to_string()))
+            }
+            _ if path.starts_with("requester.identifiers.") => {
+                let scheme = path.strip_prefix("requester.identifiers.")?;
+                self.requester
+                    .as_ref()
+                    .and_then(|requester| requester.identifier_value(scheme))
+                    .map(|value| Value::String(value.to_string()))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]

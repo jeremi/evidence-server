@@ -458,7 +458,7 @@ async fn rda_bulk_collapses_100_subjects_into_one_in_filter_request() {
     let subjects = build_subjects(100);
     let body = json!({
         "claims": ["farmed-land-size"],
-        "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -519,7 +519,7 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
     let subjects = build_subjects(4);
     let body = json!({
         "claims": ["farmed-land-size"],
-        "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -567,7 +567,7 @@ async fn dci_bulk_collapses_100_subjects_into_one_search_post() {
     let subjects = build_subjects(100);
     let body = json!({
         "claims": ["dci-claim"],
-        "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -647,7 +647,7 @@ async fn dci_bulk_missing_response_entry_surfaces_source_not_found_for_that_subj
     let subjects = build_subjects(3);
     let body = json!({
         "claims": ["dci-claim"],
-        "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -744,7 +744,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "disclosure": "value",
         }))
         .await;

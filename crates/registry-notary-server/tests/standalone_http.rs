@@ -3624,9 +3624,9 @@ async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
         }))
         .await;
 
-    response.assert_status(StatusCode::NOT_FOUND);
+    response.assert_status(StatusCode::CONFLICT);
     let body: Value = response.json();
-    assert_eq!(body["code"], json!("target.not_found"));
+    assert_eq!(body["code"], json!("evidence.not_available"));
 }
 
 #[tokio::test]

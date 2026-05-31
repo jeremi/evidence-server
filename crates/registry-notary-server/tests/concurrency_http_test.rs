@@ -417,7 +417,7 @@ async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
         .collect();
     let body = json!({
         "claims": ["farmed-land-size"],
-        "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
 
@@ -659,7 +659,7 @@ async fn oauth_source_auth_coalesces_concurrent_initial_token_fetch() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))

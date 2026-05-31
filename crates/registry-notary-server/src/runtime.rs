@@ -2356,11 +2356,7 @@ async fn fetch_binding_direct(
     Ok((row, None))
 }
 
-/// Derive the lookup value for a binding from the request target context.
-///
-/// This mirrors the derivation in `standalone::lookup_value` but is placed here
-/// so `load_sources` can compute cache keys without depending on `standalone`
-/// internals.
+/// Derive the lookup value for a binding from the request context.
 fn binding_lookup_value_for_context(
     binding: &registry_notary_core::SourceBindingConfig,
     context: &EvidenceRequestContext,
@@ -2368,7 +2364,7 @@ fn binding_lookup_value_for_context(
     if binding.lookup.op != "eq" {
         return Err(EvidenceError::InvalidRequest);
     }
-    match context_value(binding.lookup.input.as_str(), context) {
+    match context.lookup_value(binding.lookup.input.as_str()) {
         Some(value) => Ok(value),
         None if matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id") => context
             .target_subject()
@@ -2440,14 +2436,14 @@ fn validate_matching_policy(
         && !matching.sufficient_target_inputs.iter().any(|group| {
             group
                 .iter()
-                .all(|path| context_value(path.as_str(), context).is_some())
+                .all(|path| context.lookup_value(path.as_str()).is_some())
         })
     {
         let missing = matching
             .sufficient_target_inputs
             .iter()
             .flat_map(|group| group.iter())
-            .find(|path| context_value(path.as_str(), context).is_none())
+            .find(|path| context.lookup_value(path.as_str()).is_none())
             .map(String::as_str)
             .unwrap_or("target.attributes");
         return Err(missing_context_error(missing));
@@ -2617,57 +2613,6 @@ fn missing_context_error(path: &str) -> EvidenceError {
         EvidenceError::RelationshipAttributesInsufficient
     } else {
         EvidenceError::TargetAttributesInsufficient
-    }
-}
-
-fn context_value(path: &str, context: &EvidenceRequestContext) -> Option<Value> {
-    match path {
-        "subject_id" | "subject.id" | "target.id" => context
-            .target
-            .id
-            .as_ref()
-            .map(|value| Value::String(value.clone())),
-        "requester.id" => context
-            .requester
-            .as_ref()
-            .and_then(|requester| requester.id.as_ref())
-            .map(|value| Value::String(value.clone())),
-        _ if path.starts_with("target.attributes.") => {
-            let key = path.strip_prefix("target.attributes.")?;
-            context.target.attributes.get(key).cloned()
-        }
-        _ if path.starts_with("requester.attributes.") => {
-            let key = path.strip_prefix("requester.attributes.")?;
-            context
-                .requester
-                .as_ref()
-                .and_then(|requester| requester.attributes.get(key))
-                .cloned()
-        }
-        _ if path.starts_with("relationship.attributes.") => {
-            let key = path.strip_prefix("relationship.attributes.")?;
-            context
-                .relationship
-                .as_ref()
-                .and_then(|relationship| relationship.attributes.get(key))
-                .cloned()
-        }
-        _ if path.starts_with("target.identifiers.") => {
-            let scheme = path.strip_prefix("target.identifiers.")?;
-            context
-                .target
-                .identifier_value(scheme)
-                .map(|value| Value::String(value.to_string()))
-        }
-        _ if path.starts_with("requester.identifiers.") => {
-            let scheme = path.strip_prefix("requester.identifiers.")?;
-            context
-                .requester
-                .as_ref()
-                .and_then(|requester| requester.identifier_value(scheme))
-                .map(|value| Value::String(value.to_string()))
-        }
-        _ => None,
     }
 }
 

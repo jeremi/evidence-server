@@ -788,7 +788,7 @@ async fn batch_50_subjects_3_claims_shared_binding_produces_50_upstream_calls() 
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size", "is-active-farmer", "large-farm"],
-            "items": subjects.iter().cloned().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "disclosure": "value",
         }))
         .await;

@@ -258,7 +258,10 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
             "https://purpose.example.test/combined-support",
         )
         .json(&json!({
-            "subject": { "id": "NID-1" },
+            "target": {
+                "type": "Person",
+                "identifiers": [{ "scheme": "national_id", "value": "NID-1" }]
+            },
             "claims": ["eligible-for-combined-support"],
             "disclosure": "predicate"
         }))

@@ -3630,64 +3630,13 @@ fn lookup_value_for_context(
     if binding.lookup.op != "eq" {
         return Err(EvidenceError::InvalidRequest);
     }
-    match context_lookup_value(binding.lookup.input.as_str(), context) {
+    match context.lookup_value(binding.lookup.input.as_str()) {
         Some(value) => Ok(value),
         None if matches!(binding.lookup.input.as_str(), "subject_id" | "subject.id") => context
             .target_subject()
             .map(|subject| Value::String(subject.id))
             .ok_or(EvidenceError::TargetAttributesInsufficient),
         None => Err(missing_context_lookup_error(binding.lookup.input.as_str())),
-    }
-}
-
-fn context_lookup_value(path: &str, context: &EvidenceRequestContext) -> Option<Value> {
-    match path {
-        "subject_id" | "subject.id" | "target.id" => context
-            .target
-            .id
-            .as_ref()
-            .map(|value| Value::String(value.clone())),
-        "requester.id" => context
-            .requester
-            .as_ref()
-            .and_then(|requester| requester.id.as_ref())
-            .map(|value| Value::String(value.clone())),
-        _ if path.starts_with("target.attributes.") => {
-            let key = path.strip_prefix("target.attributes.")?;
-            context.target.attributes.get(key).cloned()
-        }
-        _ if path.starts_with("requester.attributes.") => {
-            let key = path.strip_prefix("requester.attributes.")?;
-            context
-                .requester
-                .as_ref()
-                .and_then(|requester| requester.attributes.get(key))
-                .cloned()
-        }
-        _ if path.starts_with("relationship.attributes.") => {
-            let key = path.strip_prefix("relationship.attributes.")?;
-            context
-                .relationship
-                .as_ref()
-                .and_then(|relationship| relationship.attributes.get(key))
-                .cloned()
-        }
-        _ if path.starts_with("target.identifiers.") => {
-            let scheme = path.strip_prefix("target.identifiers.")?;
-            context
-                .target
-                .identifier_value(scheme)
-                .map(|value| Value::String(value.to_string()))
-        }
-        _ if path.starts_with("requester.identifiers.") => {
-            let scheme = path.strip_prefix("requester.identifiers.")?;
-            context
-                .requester
-                .as_ref()
-                .and_then(|requester| requester.identifier_value(scheme))
-                .map(|value| Value::String(value.to_string()))
-        }
-        _ => None,
     }
 }
 
